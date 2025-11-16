@@ -19,7 +19,6 @@
 A progressive delivery controller for Kubernetes - deploy safely with canary rollouts, no service mesh required.
 
 **What's Actually Built:**
-- Argo Rollouts API-compatible controller
 - Gateway API-native traffic routing (no service mesh!)
 - Automated canary analysis (Prometheus metrics)
 - CDEvents emission (full pipeline observability)
