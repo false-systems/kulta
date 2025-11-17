@@ -113,3 +113,80 @@ async fn test_compute_pod_template_hash() {
     let hash3 = compute_pod_template_hash(&different_template);
     assert_ne!(hash1, hash3);
 }
+
+#[tokio::test]
+async fn test_build_replicaset_spec() {
+    // Test that we can build a ReplicaSet from a Rollout
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(
+                    vec![("app".to_string(), "test-app".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(
+                        vec![("app".to_string(), "test-app".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:1.0".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: None,
+    };
+
+    // Build stable ReplicaSet
+    let rs = build_replicaset(&rollout, "stable", 3);
+
+    assert_eq!(rs.metadata.name.as_deref(), Some("test-rollout-stable"));
+    assert_eq!(rs.metadata.namespace.as_deref(), Some("default"));
+    assert_eq!(rs.spec.as_ref().unwrap().replicas, Some(3));
+
+    // Verify pod-template-hash label exists
+    let labels = &rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .as_ref()
+        .unwrap()
+        .metadata
+        .as_ref()
+        .unwrap()
+        .labels;
+    assert!(labels.as_ref().unwrap().contains_key("pod-template-hash"));
+
+    // Verify rollouts.kulta.io/type label
+    assert_eq!(
+        labels.as_ref().unwrap().get("rollouts.kulta.io/type"),
+        Some(&"stable".to_string())
+    );
+}
