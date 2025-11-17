@@ -7,7 +7,6 @@
 [![Gateway API](https://img.shields.io/badge/Gateway%20API-v1.2.0-purple.svg)](https://gateway-api.sigs.k8s.io/)
 [![CDEvents](https://img.shields.io/badge/CDEvents-v0.4.1-orange.svg)](https://cdevents.dev)
 
-**Tech Stack:**
 [![Tokio](https://img.shields.io/badge/async-tokio-blue.svg?logo=rust)](https://tokio.rs)
 [![Kubernetes](https://img.shields.io/badge/K8s-kube--rs-326CE5.svg?logo=kubernetes&logoColor=white)](https://kube.rs)
 [![Prometheus](https://img.shields.io/badge/metrics-prometheus-E6522C.svg?logo=prometheus&logoColor=white)](https://prometheus.io)
