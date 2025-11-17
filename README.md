@@ -35,25 +35,25 @@ A progressive delivery controller for Kubernetes - deploy safely with canary rol
 
 ## What Works
 
-**Progressive Delivery** 🚀 (Planned)
+**Progressive Delivery** (Planned)
 - Canary rollouts (10% → 50% → 100%)
 - Blue-green deployments
 - Automated traffic shifting via Gateway API
 - Manual pause/resume controls
 
-**Safety & Analysis** 🛡️ (Planned)
+**Safety & Analysis** (Planned)
 - Prometheus metrics analysis
 - Automated rollback on errors
 - Configurable thresholds (error rate, latency)
 - Health checking integration
 
-**Observability** 📊 (Planned)
+**Observability** (Planned)
 - CDEvents emission (every deployment step)
 - Git commit → deployment correlation
 - Full pipeline tracing (with Tekton/CDviz)
 - Prometheus metrics
 
-**Gateway API Integration** 🌐 (Planned)
+**Gateway API Integration** (Planned)
 - HTTPRoute weight manipulation
 - Works with RAUTA or any Gateway API implementation
 - No service mesh sidecars required
@@ -74,7 +74,7 @@ A progressive delivery controller for Kubernetes - deploy safely with canary rol
 │   Argo CD / FluxCD (GitOps)                 │
 │   ↓ (syncs Rollout YAML from git)           │
 │   KULTA Controller                          │
-│   ├─ Creates canary ReplicaSet              │
+│   ├─ Creates Canary ReplicaSet              │
 │   ├─ Emits: deployment.started (CDEvent)    │
 │   ├─ Updates Gateway API HTTPRoute weights  │
 │   ├─ Queries Prometheus for health          │
@@ -90,9 +90,9 @@ A progressive delivery controller for Kubernetes - deploy safely with canary rol
 
 **The Stack:**
 ```
-RAUTA ⚙️ (Gateway API routing)
+RAUTA  (Gateway API routing)
   ↓ routes traffic
-KULTA 🏆 (Progressive delivery)
+KULTA  (Progressive delivery)
   ↓ manages deployments
 Both: Rust + Gateway API native = Simple, fast, integrated
 ```
@@ -157,22 +157,6 @@ KULTA bridges the gap:
 - Excellent async ecosystem (tokio)
 - Performance (fast reconciliation loops)
 - Building on RAUTA knowledge
-
----
-
-## Comparison
-
-**vs Argo Rollouts:**
-- Argo: Go-based, service mesh for advanced features
-- KULTA: Rust-based, Gateway API-native, CDEvents built-in
-
-**vs Flagger:**
-- Flagger: Requires service mesh (Istio/Linkerd)
-- KULTA: Gateway API only (simpler stack)
-
-**vs Both:**
-- Argo/Flagger: No CDEvents (manual correlation across tools)
-- KULTA: Full pipeline tracing (git → deploy → production)
 
 ---
 
