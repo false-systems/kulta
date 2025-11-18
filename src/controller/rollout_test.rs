@@ -1,7 +1,7 @@
 use super::*;
 use crate::crd::rollout::{
-    CanaryStep, CanaryStrategy, GatewayAPIRouting, Rollout, RolloutSpec, RolloutStrategy,
-    TrafficRouting,
+    CanaryStep, CanaryStrategy, GatewayAPIRouting, Rollout, RolloutSpec, RolloutStatus,
+    RolloutStrategy, TrafficRouting,
 };
 use kube::api::ObjectMeta;
 use std::sync::Arc;
@@ -430,4 +430,273 @@ async fn test_build_both_stable_and_canary_replicasets() {
         .unwrap();
 
     assert_eq!(stable_hash, canary_hash);
+}
+
+#[tokio::test]
+async fn test_calculate_traffic_weights_step0() {
+    // Test weight calculation for canary step 0 (20%)
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(100),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0), // First step: 20% canary
+            ..Default::default()
+        }),
+    };
+
+    // Calculate weights for step 0
+    let (stable_weight, canary_weight) = calculate_traffic_weights(&rollout);
+
+    assert_eq!(canary_weight, 20);
+    assert_eq!(stable_weight, 80);
+}
+
+#[tokio::test]
+async fn test_calculate_traffic_weights_step1() {
+    // Test weight calculation for canary step 1 (50%)
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(1), // Second step: 50% canary
+            ..Default::default()
+        }),
+    };
+
+    // Calculate weights for step 1
+    let (stable_weight, canary_weight) = calculate_traffic_weights(&rollout);
+
+    assert_eq!(canary_weight, 50);
+    assert_eq!(stable_weight, 50);
+}
+
+#[tokio::test]
+async fn test_calculate_traffic_weights_no_step() {
+    // Test weight calculation when no step is active (100% stable)
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    }],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: None, // No status yet, default to 100% stable
+    };
+
+    // Calculate weights when no step is active
+    let (stable_weight, canary_weight) = calculate_traffic_weights(&rollout);
+
+    assert_eq!(canary_weight, 0);
+    assert_eq!(stable_weight, 100);
+}
+
+#[tokio::test]
+async fn test_calculate_traffic_weights_complete() {
+    // Test weight calculation when rollout is complete (100% canary)
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(100),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(1), // Last step: 100% canary
+            ..Default::default()
+        }),
+    };
+
+    // Calculate weights for final step
+    let (stable_weight, canary_weight) = calculate_traffic_weights(&rollout);
+
+    assert_eq!(canary_weight, 100);
+    assert_eq!(stable_weight, 0);
+}
+
+#[tokio::test]
+async fn test_calculate_traffic_weights_beyond_steps() {
+    // Test weight calculation when step index is beyond available steps
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    }],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(5), // Beyond available steps (only 1 step)
+            ..Default::default()
+        }),
+    };
+
+    // When step index exceeds steps, rollout is complete (100% canary)
+    let (stable_weight, canary_weight) = calculate_traffic_weights(&rollout);
+
+    assert_eq!(canary_weight, 100);
+    assert_eq!(stable_weight, 0);
+}
+
+#[tokio::test]
+async fn test_build_httproute_backend_weights() {
+    // Test building HTTPRoute backendRefs with correct weights
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    }],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0), // 20% canary
+            ..Default::default()
+        }),
+    };
+
+    // Build backendRefs with weights from rollout
+    let backend_refs = build_backend_refs_with_weights(&rollout);
+
+    // Should have 2 backends: stable (80%) and canary (20%)
+    assert_eq!(backend_refs.len(), 2);
+
+    // Find stable backend
+    let stable = backend_refs
+        .iter()
+        .find(|b| b.name == "test-app-stable")
+        .expect("Should have stable backend");
+    assert_eq!(stable.weight, Some(80));
+
+    // Find canary backend
+    let canary = backend_refs
+        .iter()
+        .find(|b| b.name == "test-app-canary")
+        .expect("Should have canary backend");
+    assert_eq!(canary.weight, Some(20));
 }

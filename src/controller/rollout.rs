@@ -6,6 +6,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, ObjectMeta, PostParams};
 use kube::runtime::controller::Action;
 use kube::ResourceExt;
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -121,6 +122,97 @@ async fn ensure_replicaset_exists(
     }
 
     Ok(())
+}
+
+/// Simple representation of HTTPBackendRef for testing
+///
+/// This is a simplified version of Gateway API HTTPBackendRef
+/// focused on what we need for weight-based traffic splitting
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HTTPBackendRef {
+    /// Name of the Kubernetes Service
+    pub name: String,
+
+    /// Port number on the service
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+
+    /// Weight for traffic splitting (0-100)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<i32>,
+}
+
+/// Build HTTPRoute backendRefs with weights from Rollout
+///
+/// Creates a list of backend references with calculated weights:
+/// - Stable service with calculated stable_weight
+/// - Canary service with calculated canary_weight
+///
+/// # Returns
+/// Vec of HTTPBackendRef with correct weights for current rollout step
+pub fn build_backend_refs_with_weights(rollout: &Rollout) -> Vec<HTTPBackendRef> {
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => return vec![], // No canary strategy
+    };
+
+    // Calculate current weights
+    let (stable_weight, canary_weight) = calculate_traffic_weights(rollout);
+
+    vec![
+        HTTPBackendRef {
+            name: canary_strategy.stable_service.clone(),
+            port: Some(80), // Default HTTP port
+            weight: Some(stable_weight),
+        },
+        HTTPBackendRef {
+            name: canary_strategy.canary_service.clone(),
+            port: Some(80),
+            weight: Some(canary_weight),
+        },
+    ]
+}
+
+/// Calculate traffic weights for stable and canary based on Rollout status
+///
+/// Returns (stable_weight, canary_weight) as percentages
+///
+/// # Logic
+/// - If no status or no currentStepIndex: 100% stable, 0% canary
+/// - If currentStepIndex >= steps.len(): 100% canary, 0% stable (rollout complete)
+/// - Otherwise: Use setWeight from steps[currentStepIndex]
+pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => return (100, 0), // No canary strategy, 100% stable
+    };
+
+    // Get current step index from status
+    let current_step_index = match &rollout.status {
+        Some(status) => status.current_step_index.unwrap_or(-1),
+        None => -1, // No status yet, 100% stable
+    };
+
+    // If no step is active, default to 100% stable
+    if current_step_index < 0 {
+        return (100, 0);
+    }
+
+    // If step index is beyond available steps, rollout is complete (100% canary)
+    if current_step_index as usize >= canary_strategy.steps.len() {
+        return (0, 100);
+    }
+
+    // Get the canary weight from the current step
+    let canary_weight = canary_strategy.steps[current_step_index as usize]
+        .set_weight
+        .unwrap_or(0);
+
+    let stable_weight = 100 - canary_weight;
+
+    (stable_weight, canary_weight)
 }
 
 /// Build a ReplicaSet for a Rollout
