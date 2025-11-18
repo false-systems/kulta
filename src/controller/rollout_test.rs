@@ -76,7 +76,10 @@ async fn test_reconcile_creates_stable_replicaset() {
     let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
 
     // Verify stable ReplicaSet has correct properties
-    assert_eq!(stable_rs.metadata.name.as_deref(), Some("test-rollout-stable"));
+    assert_eq!(
+        stable_rs.metadata.name.as_deref(),
+        Some("test-rollout-stable")
+    );
     assert_eq!(stable_rs.metadata.namespace.as_deref(), Some("default"));
     assert_eq!(stable_rs.spec.as_ref().unwrap().replicas, Some(3));
 
@@ -199,4 +202,232 @@ async fn test_build_replicaset_spec() {
         labels.as_ref().unwrap().get("rollouts.kulta.io/type"),
         Some(&"stable".to_string())
     );
+}
+
+#[tokio::test]
+async fn test_reconcile_creates_canary_replicaset() {
+    // Test that reconcile creates BOTH stable and canary ReplicaSets
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(
+                    vec![("app".to_string(), "test-app".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(
+                        vec![("app".to_string(), "test-app".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:1.0".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    }],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                }),
+            },
+        },
+        status: None,
+    };
+
+    // Build canary ReplicaSet (should have 0 replicas initially)
+    let canary_rs = build_replicaset(&rollout, "canary", 0);
+
+    // Verify canary ReplicaSet has correct properties
+    assert_eq!(
+        canary_rs.metadata.name.as_deref(),
+        Some("test-rollout-canary")
+    );
+    assert_eq!(canary_rs.metadata.namespace.as_deref(), Some("default"));
+    assert_eq!(canary_rs.spec.as_ref().unwrap().replicas, Some(0));
+
+    // Verify canary has rollouts.kulta.io/type=canary label
+    let labels = &canary_rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .as_ref()
+        .unwrap()
+        .metadata
+        .as_ref()
+        .unwrap()
+        .labels;
+    assert_eq!(
+        labels.as_ref().unwrap().get("rollouts.kulta.io/type"),
+        Some(&"canary".to_string())
+    );
+
+    // Test that reconcile logic would create canary (test verifies build logic)
+    // Full integration test requires real K8s cluster
+    let result = reconcile(Arc::new(rollout), Arc::new(Context::new_mock())).await;
+    assert!(result.is_ok());
+}
+
+#[tokio::test]
+async fn test_build_both_stable_and_canary_replicasets() {
+    // Test that we can build both stable and canary ReplicaSets
+    // This test ensures both types are buildable before reconcile uses them
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 5,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(
+                    vec![("app".to_string(), "test-app".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(
+                        vec![("app".to_string(), "test-app".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:2.0".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: None,
+    };
+
+    // Build both ReplicaSets
+    let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
+    let canary_rs = build_replicaset(&rollout, "canary", 0);
+
+    // Verify stable ReplicaSet
+    assert_eq!(
+        stable_rs.metadata.name.as_deref(),
+        Some("test-rollout-stable")
+    );
+    assert_eq!(stable_rs.spec.as_ref().unwrap().replicas, Some(5));
+    assert_eq!(
+        stable_rs
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .as_ref()
+            .unwrap()
+            .get("rollouts.kulta.io/type"),
+        Some(&"stable".to_string())
+    );
+
+    // Verify canary ReplicaSet
+    assert_eq!(
+        canary_rs.metadata.name.as_deref(),
+        Some("test-rollout-canary")
+    );
+    assert_eq!(canary_rs.spec.as_ref().unwrap().replicas, Some(0));
+    assert_eq!(
+        canary_rs
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .as_ref()
+            .unwrap()
+            .get("rollouts.kulta.io/type"),
+        Some(&"canary".to_string())
+    );
+
+    // Verify both share the same pod-template-hash (same template)
+    let stable_hash = stable_rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .as_ref()
+        .unwrap()
+        .metadata
+        .as_ref()
+        .unwrap()
+        .labels
+        .as_ref()
+        .unwrap()
+        .get("pod-template-hash")
+        .unwrap();
+
+    let canary_hash = canary_rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .as_ref()
+        .unwrap()
+        .metadata
+        .as_ref()
+        .unwrap()
+        .labels
+        .as_ref()
+        .unwrap()
+        .get("pod-template-hash")
+        .unwrap();
+
+    assert_eq!(stable_hash, canary_hash);
 }

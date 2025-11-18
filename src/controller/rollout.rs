@@ -12,7 +12,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 #[derive(Debug, Error)]
 pub enum ReconcileError {
@@ -67,6 +67,60 @@ pub fn compute_pod_template_hash(template: &PodTemplateSpec) -> String {
 
     // Return 10-character hex string (like Kubernetes)
     format!("{:x}", hash)[..10].to_string()
+}
+
+/// Ensure a ReplicaSet exists (create if missing)
+///
+/// This function is idempotent - it will:
+/// - Return Ok if ReplicaSet already exists
+/// - Create ReplicaSet if it doesn't exist (404)
+/// - Return Err on other API errors
+async fn ensure_replicaset_exists(
+    rs_api: &Api<ReplicaSet>,
+    rs: &ReplicaSet,
+    rs_type: &str,
+    replicas: i32,
+) -> Result<(), ReconcileError> {
+    let rs_name = rs.metadata.name.as_ref().unwrap();
+
+    match rs_api.get(rs_name).await {
+        Ok(_existing) => {
+            // Already exists
+            info!(
+                replicaset = ?rs_name,
+                rs_type = rs_type,
+                "ReplicaSet already exists"
+            );
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            // Not found, create it
+            info!(
+                replicaset = ?rs_name,
+                rs_type = rs_type,
+                replicas = replicas,
+                "Creating ReplicaSet"
+            );
+
+            rs_api.create(&PostParams::default(), rs).await?;
+
+            info!(
+                replicaset = ?rs_name,
+                rs_type = rs_type,
+                "ReplicaSet created successfully"
+            );
+        }
+        Err(e) => {
+            error!(
+                error = ?e,
+                replicaset = ?rs_name,
+                rs_type = rs_type,
+                "Failed to get ReplicaSet"
+            );
+            return Err(ReconcileError::KubeError(e));
+        }
+    }
+
+    Ok(())
 }
 
 /// Build a ReplicaSet for a Rollout
@@ -139,10 +193,7 @@ pub fn build_replicaset(rollout: &Rollout, rs_type: &str, replicas: i32) -> Repl
 /// # Returns
 /// * `Ok(Action)` - Next reconciliation action (requeue after 5 minutes)
 /// * `Err(ReconcileError)` - Reconciliation error
-pub async fn reconcile(
-    rollout: Arc<Rollout>,
-    ctx: Arc<Context>,
-) -> Result<Action, ReconcileError> {
+pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Action, ReconcileError> {
     // Validate rollout has required fields
     let namespace = rollout
         .namespace()
@@ -155,46 +206,16 @@ pub async fn reconcile(
         "Reconciling Rollout"
     );
 
-    // Build stable ReplicaSet
-    let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
-    let stable_rs_name = stable_rs.metadata.name.as_ref().unwrap();
-
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
 
-    // Check if stable ReplicaSet exists
-    match rs_api.get(stable_rs_name).await {
-        Ok(_existing) => {
-            // Already exists
-            info!(
-                replicaset = ?stable_rs_name,
-                "Stable ReplicaSet already exists"
-            );
-        }
-        Err(kube::Error::Api(err)) if err.code == 404 => {
-            // Not found, create it
-            info!(
-                replicaset = ?stable_rs_name,
-                replicas = rollout.spec.replicas,
-                "Creating stable ReplicaSet"
-            );
+    // Build and ensure stable ReplicaSet exists
+    let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
+    ensure_replicaset_exists(&rs_api, &stable_rs, "stable", rollout.spec.replicas).await?;
 
-            rs_api.create(&PostParams::default(), &stable_rs).await?;
-
-            info!(
-                replicaset = ?stable_rs_name,
-                "Stable ReplicaSet created successfully"
-            );
-        }
-        Err(e) => {
-            error!(
-                error = ?e,
-                replicaset = ?stable_rs_name,
-                "Failed to get ReplicaSet"
-            );
-            return Err(ReconcileError::KubeError(e));
-        }
-    }
+    // Build and ensure canary ReplicaSet exists (0 replicas initially)
+    let canary_rs = build_replicaset(&rollout, "canary", 0);
+    ensure_replicaset_exists(&rs_api, &canary_rs, "canary", 0).await?;
 
     // Requeue after 5 minutes
     Ok(Action::requeue(Duration::from_secs(300)))
