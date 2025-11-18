@@ -174,6 +174,49 @@ pub fn build_backend_refs_with_weights(rollout: &Rollout) -> Vec<HTTPBackendRef>
     ]
 }
 
+/// Build Gateway API HTTPRouteRulesBackendRefs with weights from Rollout
+///
+/// Converts our simple HTTPBackendRef representation to the actual Gateway API
+/// HTTPRouteRulesBackendRefs type used in HTTPRoute resources.
+///
+/// # Returns
+/// Vec of HTTPRouteRulesBackendRefs with correct weights for current rollout step
+pub fn build_gateway_api_backend_refs(
+    rollout: &Rollout,
+) -> Vec<gateway_api::apis::standard::httproutes::HTTPRouteRulesBackendRefs> {
+    use gateway_api::apis::standard::httproutes::HTTPRouteRulesBackendRefs;
+
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => return vec![], // No canary strategy
+    };
+
+    // Calculate current weights
+    let (stable_weight, canary_weight) = calculate_traffic_weights(rollout);
+
+    vec![
+        HTTPRouteRulesBackendRefs {
+            name: canary_strategy.stable_service.clone(),
+            port: Some(80), // Default HTTP port
+            weight: Some(stable_weight),
+            kind: Some("Service".to_string()),
+            group: Some("".to_string()), // Core API group (empty string)
+            namespace: None,             // Same namespace as HTTPRoute
+            filters: None,               // No filters for now
+        },
+        HTTPRouteRulesBackendRefs {
+            name: canary_strategy.canary_service.clone(),
+            port: Some(80),
+            weight: Some(canary_weight),
+            kind: Some("Service".to_string()),
+            group: Some("".to_string()),
+            namespace: None,
+            filters: None,
+        },
+    ]
+}
+
 /// Calculate traffic weights for stable and canary based on Rollout status
 ///
 /// Returns (stable_weight, canary_weight) as percentages
