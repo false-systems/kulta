@@ -3,19 +3,27 @@ use futures::FutureExt;
 use k8s_openapi::api::apps::v1::{ReplicaSet, ReplicaSetSpec};
 use k8s_openapi::api::core::v1::PodTemplateSpec;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
-use kube::api::ObjectMeta;
+use kube::api::{Api, ObjectMeta, PostParams};
 use kube::runtime::controller::Action;
+use kube::ResourceExt;
 use serde_json;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Error)]
 pub enum ReconcileError {
     #[error("Kubernetes API error: {0}")]
     KubeError(#[from] kube::Error),
+
+    #[error("Rollout missing namespace")]
+    MissingNamespace,
+
+    #[error("Rollout missing name")]
+    MissingName,
 }
 
 pub struct Context {
@@ -118,14 +126,77 @@ pub fn build_replicaset(rollout: &Rollout, rs_type: &str, replicas: i32) -> Repl
     }
 }
 
-/// Reconcile function for Rollout controller
+/// Reconcile a Rollout resource
+///
+/// This function implements the main reconciliation logic:
+/// 1. Creates stable ReplicaSet if missing
+/// 2. Handles errors gracefully (404 = create, other errors = fail)
+///
+/// # Arguments
+/// * `rollout` - The Rollout resource to reconcile
+/// * `ctx` - Controller context (k8s client)
+///
+/// # Returns
+/// * `Ok(Action)` - Next reconciliation action (requeue after 5 minutes)
+/// * `Err(ReconcileError)` - Reconciliation error
 pub async fn reconcile(
-    _rollout: Arc<Rollout>,
-    _ctx: Arc<Context>,
+    rollout: Arc<Rollout>,
+    ctx: Arc<Context>,
 ) -> Result<Action, ReconcileError> {
-    // Minimal implementation - just return success
-    // GREEN phase: make the test pass
+    // Validate rollout has required fields
+    let namespace = rollout
+        .namespace()
+        .ok_or(ReconcileError::MissingNamespace)?;
+    let name = rollout.name_any();
 
+    info!(
+        rollout = ?name,
+        namespace = ?namespace,
+        "Reconciling Rollout"
+    );
+
+    // Build stable ReplicaSet
+    let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
+    let stable_rs_name = stable_rs.metadata.name.as_ref().unwrap();
+
+    // Create ReplicaSet API client
+    let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    // Check if stable ReplicaSet exists
+    match rs_api.get(stable_rs_name).await {
+        Ok(_existing) => {
+            // Already exists
+            info!(
+                replicaset = ?stable_rs_name,
+                "Stable ReplicaSet already exists"
+            );
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            // Not found, create it
+            info!(
+                replicaset = ?stable_rs_name,
+                replicas = rollout.spec.replicas,
+                "Creating stable ReplicaSet"
+            );
+
+            rs_api.create(&PostParams::default(), &stable_rs).await?;
+
+            info!(
+                replicaset = ?stable_rs_name,
+                "Stable ReplicaSet created successfully"
+            );
+        }
+        Err(e) => {
+            error!(
+                error = ?e,
+                replicaset = ?stable_rs_name,
+                "Failed to get ReplicaSet"
+            );
+            return Err(ReconcileError::KubeError(e));
+        }
+    }
+
+    // Requeue after 5 minutes
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 

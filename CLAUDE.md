@@ -10,7 +10,6 @@
 - **Goal**: Build a Gateway API-native progressive delivery controller with CDEvents observability
 - **Language**: 100% Rust
 - **Status**: Just starting - exploring and learning
-- **Approach**: Have fun, ship working code, no pressure
 
 ---
 
@@ -32,7 +31,6 @@
 - **Rust for safety and performance** (building on RAUTA knowledge)
 - **Gateway API only** (no service mesh complexity)
 - **CDEvents for observability** (make CD visible like CI)
-- **Fun first** (learning project, not production pressure)
 
 ---
 
@@ -76,7 +74,6 @@
 
 **Why This Architecture:**
 - **No service mesh** - Gateway API handles traffic routing
-- **Argo Rollouts compatible** - Drop-in replacement (use same CRDs)
 - **CDEvents native** - Observability built-in, not bolted-on
 - **Rust controller** - Fast, safe, low resource usage
 
@@ -226,6 +223,13 @@ async fn create_canary_replicaset(rollout: &Rollout) -> Result<()> {
 // # test_rollout_creates_canary_replicaset ... ok (GREEN phase confirmed)
 ```
 
+We only work in very short commits, very fast intervals.
+NO hardcoded values
+Lean mother fucking code
+FAST like Hell
+NO SHORTCUTS, WE PUT EFFORT for BEST PRACTICES!
+
+
 ### TDD Checklist
 
 - [ ] **RED**: Write failing test first
@@ -237,6 +241,7 @@ async fn create_canary_replicaset(rollout: &Rollout) -> Result<()> {
 - [ ] **Commit**: `git add . && git commit -m "feat: ..."` (incremental commits)
 
 ---
+We only work in very short commits
 
 ## REALISTIC SCOPE
 
@@ -253,17 +258,6 @@ async fn create_canary_replicaset(rollout: &Rollout) -> Result<()> {
 - CDEvents built-in (observable by default)
 - Argo Rollouts API-compatible (easy migration)
 
-### What KULTA IS NOT
-
-**Not trying to replace Argo Rollouts**
-- Argo is mature, battle-tested
-- KULTA is focused on simplicity + observability
-- Different target: teams using Gateway API
-
-**Not a production requirement**
-- This is a fun project
-- No timeline, no pressure
-- Learning comes first
 
 ---
 
@@ -279,89 +273,342 @@ A feature is complete when:
 
 **NO STUBS. NO TODOs. COMPLETE CODE OR NOTHING.**
 
----
+MANDATORY WORKFLOW:
+1. Read relevant source files (use view/cat commands)
+2. Read existing tests (understand expected behavior)
+3. Understand current architecture (don't break patterns)
+4. Propose implementation (get human approval)
+5. Write code (follow existing style)
 
-## DEVELOPMENT ROADMAP
 
-### V1: Basic Canary (Fun Weekend Project)
+2. Follow TDD Strictly (RED → GREEN → REFACTOR)
+Agents must follow the TDD workflow explicitly:
+rust// PHASE 1: RED (Agent writes failing test)
+#[tokio::test]
+async fn test_reconcile_updates_status() {
+    let rollout = create_test_rollout();
+    reconcile(rollout.clone(), ctx).await.unwrap();
+    
+    let updated = get_rollout("test-rollout").await.unwrap();
+    assert_eq!(updated.status.unwrap().phase, Some("Progressing".to_string()));
+}
 
-**Goal**: Manually controlled canary rollout
+// Agent confirms: "Test written, should FAIL. Run cargo test to verify RED phase."
 
-- [ ] Define basic Rollout CRD (simplified Argo API)
-- [ ] Watch Rollout resources
-- [ ] Create canary ReplicaSet
-- [ ] Update HTTPRoute weights manually (kubectl)
-- [ ] Test with RAUTA in kind cluster
+// PHASE 2: GREEN (Agent implements minimal code)
+// In reconcile():
+let status = RolloutStatus {
+    phase: Some("Progressing".to_string()),
+    replicas: rollout.spec.replicas,
+    ..Default::default()
+};
 
-**Scope**: Just prove the concept works
+// Agent confirms: "Implementation added. Run cargo test to verify GREEN phase."
 
-### V2: Automated Progression
+// PHASE 3: REFACTOR (Agent improves)
+// Add error handling, edge cases, better naming
+3. No Stubs, No TODOs
+Agents must write complete, working code:
+BAD (Agent generates stub):
+rustasync fn emit_cdevent(rollout: &Rollout) -> Result<()> {
+    // TODO: Implement CDEvents emission
+    todo!("CDEvents not implemented yet")
+}
+GOOD (Agent implements or asks):
+rust// Option 1: Agent implements if clear
+async fn emit_cdevent(rollout: &Rollout) -> Result<()> {
+    let event = CloudEvent::new()
+        .event_type("dev.cdevents.deployment.started.v1")
+        .source("kulta-controller")
+        .build()?;
+    
+    HTTP_CLIENT.post(&CDEVENTS_SINK_URL)
+        .json(&event)
+        .send().await?;
+    Ok(())
+}
 
-**Goal**: Automatic traffic shifting
+// Option 2: Agent asks if unclear
+// "I need clarification: Should CDEvents be sent via HTTP POST?"
+4. Provide Complete Context in Responses
+When implementing features, agents must:
+Show the full implementation:
+rust// GOOD: Complete, copy-pasteable code
+pub async fn reconcile(
+    rollout: Arc<Rollout>,
+    ctx: Arc<Context>,
+) -> Result<Action, ReconcileError> {
+    let namespace = rollout.metadata.namespace.as_ref()
+        .ok_or_else(|| ReconcileError::MissingNamespace)?;
 
-- [ ] Define rollout steps (10%, 50%, 100%)
-- [ ] Automatic weight progression
-- [ ] Pause duration support
-- [ ] Manual pause/resume
+    let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), namespace);
+    let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
+    
+    // ... complete implementation, not snippets
+}
+Explain what changed:
+Changes made:
+1. Added namespace validation (line 5-6)
+2. Created ReplicaSet API client (line 8)
+3. Built stable ReplicaSet (line 9)
 
-**Scope**: Basic automation
+Files modified:
+- src/controller/rollout.rs (reconcile function)
 
-### V3: Metrics Analysis
+Tests to run:
+- cargo test test_reconcile_creates_stable_replicaset
+5. Incremental Commits Matter
+Agents should suggest commit messages:
+bash# After implementing stable ReplicaSet creation:
+git commit -m "feat: implement stable ReplicaSet creation in reconcile
 
-**Goal**: Auto-rollback on errors
+- Add namespace validation
+- Create ReplicaSet if missing (404 check)
+- Proper error handling for API errors
+- Tests: test_reconcile_creates_stable_replicaset passing"
 
-- [ ] Prometheus client integration
-- [ ] Query error rates, latency
-- [ ] Threshold checking
-- [ ] Automatic rollback
+AI AGENT TDD WORKFLOW
+When human requests a feature, agent MUST follow this exact sequence:
+Step 1: UNDERSTAND
+- Read relevant source files
+- Check existing tests
+- Ask clarifying questions if unclear
 
-**Scope**: Safety features
+Step 2: RED (Write Failing Test)
+Agent: "I'll write the test first. Here's the failing test..."
+[Provides complete test code]
+Agent: "This should FAIL. Run cargo test to verify RED phase."
 
-### V4: CDEvents Integration
+Step 3: GREEN (Minimal Implementation)
+Agent: "Here's the minimal implementation to make the test pass..."
+[Provides complete implementation]
+Agent: "This should PASS. Run cargo test to verify GREEN phase."
 
-**Goal**: Full pipeline observability
+Step 4: REFACTOR (Improve Code)
+Agent: "Now let's improve the implementation..."
+[Adds error handling, edge cases, better naming]
+Agent: "Tests should still pass. Run cargo test to verify."
 
-- [ ] CDEvents SDK integration
-- [ ] Emit deployment events
-- [ ] Link to git commits (annotations/labels)
-- [ ] Works with CDviz
+Step 5: COMMIT
+Agent: "Ready to commit. Suggested message:
+feat: add status updates to reconcile
 
-**Scope**: The differentiator
+- Updates phase to Progressing
+- Sets replicas count from ReplicaSet
+- Tests passing"
 
----
+ERROR HANDLING PATTERNS
+Agents must use proper Rust error handling:
+BAD:
+rustasync fn reconcile() -> Result<Action> {
+    let rs = get_replicaset().await.unwrap(); // NEVER unwrap in production
+    Ok(Action::requeue(Duration::from_secs(300)))
+}
+GOOD:
+rustasync fn reconcile() -> Result<Action, ReconcileError> {
+    let rs = match get_replicaset().await {
+        Ok(rs) => rs,
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            // Not found, create it
+            create_replicaset().await?
+        }
+        Err(e) => return Err(ReconcileError::KubeError(e)),
+    };
+    Ok(Action::requeue(Duration::from_secs(300)))
+}
+Error types must be explicit:
+rust#[derive(Debug, Error)]
+pub enum ReconcileError {
+    #[error("Kubernetes API error: {0}")]
+    KubeError(#[from] kube::Error),
+    
+    #[error("Rollout missing namespace")]
+    MissingNamespace,
+    
+    #[error("CDEvents emission failed: {0}")]
+    CDEventsError(String),
+}
 
-## COMPETITIVE POSITIONING
+CODE STYLE REQUIREMENTS
+Agents must follow these Rust patterns:
+1. Use strong types, not stringly-typed code:
+BAD:
+rustlet phase = "Progressing"; // String literal
+rollout.status.phase = Some(phase.to_string());
+GOOD:
+rust#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Phase {
+    Initializing,
+    Progressing,
+    Paused,
+    Completed,
+    Failed,
+}
 
-**vs Argo Rollouts:**
-- Argo: Mature, feature-rich, Go-based
-- KULTA: Simple, Gateway API-native, CDEvents built-in, Rust-based
+rollout.status.phase = Some(Phase::Progressing);
+2. Prefer explicit over implicit:
+BAD:
+rustlet name = rollout.metadata.name.unwrap(); // What if None?
+GOOD:
+rustlet name = rollout.metadata.name.as_ref()
+    .ok_or(ReconcileError::MissingName)?;
+3. Use tracing, not println:
+BAD:
+rustprintln!("Reconciling rollout: {}", name);
+GOOD:
+rustuse tracing::{info, warn, error};
 
-**vs Flagger:**
-- Flagger: Requires service mesh
-- KULTA: Gateway API only
+info!(rollout = ?name, "Reconciling rollout");
+warn!(rs_name = ?rs_name, "ReplicaSet not found, creating");
+error!(error = ?err, "Failed to create ReplicaSet");
 
-**The Pitch:**
-> "KULTA: Progressive delivery for teams using Gateway API. Simple (no service mesh), fast (Rust), observable (CDEvents). Works perfectly with RAUTA."
+TESTING REQUIREMENTS
+Agents must write tests that:
+1. Test one thing clearly:
+BAD (tests multiple things):
+rust#[tokio::test]
+async fn test_reconcile() {
+    // Tests ReplicaSet creation AND status updates AND CDEvents
+    // Hard to debug when it fails
+}
+GOOD (focused tests):
+rust#[tokio::test]
+async fn test_reconcile_creates_stable_replicaset() {
+    // Only tests ReplicaSet creation
+}
 
----
+#[tokio::test]
+async fn test_reconcile_updates_status() {
+    // Only tests status updates
+}
 
-## FINAL MANIFESTO
+#[tokio::test]
+async fn test_reconcile_emits_cdevents() {
+    // Only tests CDEvents emission
+}
+2. Use descriptive test names:
+BAD: test_reconcile()
+GOOD: test_reconcile_creates_stable_replicaset_when_missing()
+3. Follow AAA pattern (Arrange, Act, Assert):
+rust#[tokio::test]
+async fn test_reconcile_creates_canary_when_stable_exists() {
+    // ARRANGE: Set up test state
+    let rollout = create_test_rollout();
+    let stable_rs = create_stable_replicaset(&rollout).await;
+    
+    // ACT: Execute the code under test
+    reconcile(Arc::new(rollout), ctx).await.unwrap();
+    
+    // ASSERT: Verify the results
+    let canary = get_replicaset("test-rollout-canary").await.unwrap();
+    assert_eq!(canary.spec.unwrap().replicas, Some(0));
+}
 
-**KULTA is a fun learning project for building progressive delivery in Rust.**
+DOCUMENTATION REQUIREMENTS
+Agents must add documentation:
+1. Module-level docs:
+rust//! Rollout controller reconciliation logic
+//!
+//! This module implements the core reconciliation loop for Rollout resources.
+//! It creates and manages ReplicaSets, updates Gateway API HTTPRoutes,
+//! and emits CDEvents for observability.
 
-**We're building:**
-- Simple progressive delivery (no service mesh)
-- Gateway API-native (works with RAUTA)
-- CDEvents observability (make CD visible)
-- Learning Rust controllers (building on RAUTA)
+pub mod rollout;
+2. Function-level docs:
+rust/// Reconcile a Rollout resource
+///
+/// This function implements the main reconciliation logic:
+/// 1. Creates stable ReplicaSet if missing
+/// 2. Creates canary ReplicaSet (0 replicas initially)
+/// 3. Updates HTTPRoute weights based on rollout steps
+/// 4. Emits CDEvents at each stage
+///
+/// # Arguments
+/// * `rollout` - The Rollout resource to reconcile
+/// * `ctx` - Controller context (k8s client, CDEvents sink)
+///
+/// # Returns
+/// * `Ok(Action)` - Next reconciliation action (requeue after duration)
+/// * `Err(ReconcileError)` - Reconciliation error
+pub async fn reconcile(
+    rollout: Arc<Rollout>,
+    ctx: Arc<Context>,
+) -> Result<Action, ReconcileError> {
+    // Implementation
+}
+3. Complex logic needs comments:
+rust// Compute pod-template-hash like Kubernetes does
+// This ensures ReplicaSets are uniquely identified by their PodSpec
+let hash = compute_pod_template_hash(&rollout.spec.template);
 
-**We're NOT building:**
-- Production requirement (this is for fun)
-- Argo Rollouts replacement (learn from Argo, simplify for Gateway API)
-- Enterprise features (keep it simple)
+// Check if ReplicaSet exists (404 = not found, other errors = fail)
+match rs_api.get(&rs_name).await {
+    Ok(existing) => { /* already exists */ }
+    Err(kube::Error::Api(err)) if err.code == 404 => { /* create it */ }
+    Err(e) => return Err(e.into()),
+}
 
-**Learn. Build. Have Fun.**
+AGENT CHECKLIST FOR EVERY IMPLEMENTATION
+Before submitting code, agents must verify:
 
----
+ Read existing code to understand patterns
+ Wrote failing test first (RED phase)
+ Implemented minimal code to pass test (GREEN phase)
+ Added error handling (no unwrap in production code)
+ Added tracing (info/warn/error, not println)
+ Added documentation (module, function, complex logic)
+ Followed Rust idioms (strong types, explicit errors)
+ Suggested commit message
+ Tests pass (cargo test)
+ Code compiles (cargo build)
+ No TODOs or stubs left in code
 
-**Gold-standard deployments with observable pipelines.**
+
+EXAMPLE: GOOD AGENT INTERACTION
+Human: "Implement stable ReplicaSet creation in reconcile"
+
+Agent:
+"I'll implement stable ReplicaSet creation following TDD. Let me first check 
+the current code..."
+
+[Reads src/controller/rollout.rs]
+[Reads src/crd/rollout.rs]
+[Reads src/controller/rollout_test.rs]
+
+Agent:
+"I see test_reconcile_creates_stable_replicaset already exists and is failing.
+This is the RED phase. I'll now implement the minimal code to make it pass."
+
+[Provides complete implementation]
+
+Agent:
+"Implementation complete. Changes made:
+1. Added namespace validation
+2. Created ReplicaSet API client
+3. Check if stable ReplicaSet exists (handle 404)
+4. Create ReplicaSet if missing
+5. Added tracing (info when creating)
+
+Run: cargo test test_reconcile_creates_stable_replicaset
+
+This should pass (GREEN phase). Ready to commit?
+
+Suggested commit:
+feat: implement stable ReplicaSet creation in reconcile
+
+- Add namespace validation with proper error
+- Create stable ReplicaSet if missing (404 check)
+- Add tracing for ReplicaSet operations
+- Tests: test_reconcile_creates_stable_replicaset passing"
+
+FINAL REMINDER FOR AGENTS
+KULTA is a learning project, but code quality matters:
+
+Write production-quality code (proper errors, tracing, docs)
+Follow TDD strictly (RED → GREEN → REFACTOR)
+No stubs or TODOs (complete implementations only)
+Test thoroughly (unit tests + integration tests)
+Commit incrementally (small, focused commits)
+
+When in doubt, ask the human for clarification.
+
