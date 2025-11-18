@@ -65,7 +65,7 @@ fn test_rollout_crd_schema_generation() {
     assert_eq!(crd.spec.names.plural, "rollouts");
 
     // Verify schema exists (validates CRD structure)
-    assert!(crd.spec.versions.len() > 0);
+    assert!(!crd.spec.versions.is_empty());
     let version = &crd.spec.versions[0];
     assert_eq!(version.name, "v1alpha1");
     assert!(version.served);

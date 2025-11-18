@@ -700,3 +700,88 @@ async fn test_build_httproute_backend_weights() {
         .expect("Should have canary backend");
     assert_eq!(canary.weight, Some(20));
 }
+
+#[tokio::test]
+async fn test_convert_to_gateway_api_backend_refs() {
+    // Test conversion from our HTTPBackendRef to gateway-api HTTPRouteRulesBackendRefs
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    }],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0), // 20% canary
+            ..Default::default()
+        }),
+    };
+
+    // Convert to gateway-api backend refs
+    let gateway_backend_refs = build_gateway_api_backend_refs(&rollout);
+
+    // Should have 2 backends: stable (80%) and canary (20%)
+    assert_eq!(gateway_backend_refs.len(), 2);
+
+    // Verify stable backend
+    let stable = gateway_backend_refs
+        .iter()
+        .find(|b| b.name == "test-app-stable")
+        .expect("Should have stable backend");
+    assert_eq!(stable.weight, Some(80));
+    assert_eq!(stable.port, Some(80));
+    assert_eq!(stable.kind.as_deref(), Some("Service"));
+    assert_eq!(stable.group.as_deref(), Some(""));
+
+    // Verify canary backend
+    let canary = gateway_backend_refs
+        .iter()
+        .find(|b| b.name == "test-app-canary")
+        .expect("Should have canary backend");
+    assert_eq!(canary.weight, Some(20));
+    assert_eq!(canary.port, Some(80));
+    assert_eq!(canary.kind.as_deref(), Some("Service"));
+    assert_eq!(canary.group.as_deref(), Some(""));
+}
+
+#[tokio::test]
+async fn test_gateway_api_backend_refs_no_canary_strategy() {
+    // Test that we return empty vec when no canary strategy exists
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy { canary: None }, // No canary strategy
+        },
+        status: None,
+    };
+
+    // Should return empty vec when no canary strategy
+    let gateway_backend_refs = build_gateway_api_backend_refs(&rollout);
+    assert_eq!(gateway_backend_refs.len(), 0);
+}
