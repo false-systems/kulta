@@ -123,6 +123,47 @@ async fn ensure_replicaset_exists(
     Ok(())
 }
 
+/// Calculate traffic weights for stable and canary based on Rollout status
+///
+/// Returns (stable_weight, canary_weight) as percentages
+///
+/// # Logic
+/// - If no status or no currentStepIndex: 100% stable, 0% canary
+/// - If currentStepIndex >= steps.len(): 100% canary, 0% stable (rollout complete)
+/// - Otherwise: Use setWeight from steps[currentStepIndex]
+pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => return (100, 0), // No canary strategy, 100% stable
+    };
+
+    // Get current step index from status
+    let current_step_index = match &rollout.status {
+        Some(status) => status.current_step_index.unwrap_or(-1),
+        None => -1, // No status yet, 100% stable
+    };
+
+    // If no step is active, default to 100% stable
+    if current_step_index < 0 {
+        return (100, 0);
+    }
+
+    // If step index is beyond available steps, rollout is complete (100% canary)
+    if current_step_index as usize >= canary_strategy.steps.len() {
+        return (0, 100);
+    }
+
+    // Get the canary weight from the current step
+    let canary_weight = canary_strategy.steps[current_step_index as usize]
+        .set_weight
+        .unwrap_or(0);
+
+    let stable_weight = 100 - canary_weight;
+
+    (stable_weight, canary_weight)
+}
+
 /// Build a ReplicaSet for a Rollout
 ///
 /// Creates a ReplicaSet with:
