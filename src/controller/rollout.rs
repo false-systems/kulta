@@ -6,6 +6,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, ObjectMeta, PostParams};
 use kube::runtime::controller::Action;
 use kube::ResourceExt;
+use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -121,6 +122,56 @@ async fn ensure_replicaset_exists(
     }
 
     Ok(())
+}
+
+/// Simple representation of HTTPBackendRef for testing
+///
+/// This is a simplified version of Gateway API HTTPBackendRef
+/// focused on what we need for weight-based traffic splitting
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HTTPBackendRef {
+    /// Name of the Kubernetes Service
+    pub name: String,
+
+    /// Port number on the service
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+
+    /// Weight for traffic splitting (0-100)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub weight: Option<i32>,
+}
+
+/// Build HTTPRoute backendRefs with weights from Rollout
+///
+/// Creates a list of backend references with calculated weights:
+/// - Stable service with calculated stable_weight
+/// - Canary service with calculated canary_weight
+///
+/// # Returns
+/// Vec of HTTPBackendRef with correct weights for current rollout step
+pub fn build_backend_refs_with_weights(rollout: &Rollout) -> Vec<HTTPBackendRef> {
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => return vec![], // No canary strategy
+    };
+
+    // Calculate current weights
+    let (stable_weight, canary_weight) = calculate_traffic_weights(rollout);
+
+    vec![
+        HTTPBackendRef {
+            name: canary_strategy.stable_service.clone(),
+            port: Some(80), // Default HTTP port
+            weight: Some(stable_weight),
+        },
+        HTTPBackendRef {
+            name: canary_strategy.canary_service.clone(),
+            port: Some(80),
+            weight: Some(canary_weight),
+        },
+    ]
 }
 
 /// Calculate traffic weights for stable and canary based on Rollout status
