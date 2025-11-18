@@ -36,6 +36,25 @@
 
 ## ARCHITECTURE PHILOSOPHY
 
+### The Core Insight
+
+**THE CORE INSIGHT**: Without status tracking and history, you're just reacting to changes.
+With proper state management, you're building deployment intelligence.
+
+**The Rollout Status IS the brain:**
+- **Spec**: Desired state (what user wants)
+- **Reconcile**: Drive toward desired state
+- **ReplicaSets**: Actuate the deployment
+- **HTTPRoute**: Control traffic
+- **Status**: Track reality (what actually happened)
+- **CDEvents**: Broadcast the story
+
+**Every feature must consider:**
+1. What status fields track this?
+2. What CDEvents describe this?
+3. How do we recover from failure?
+4. What does time-travel query show?
+
 ### The Vision
 
 **KULTA is a progressive delivery controller that:**
@@ -85,6 +104,59 @@
 - **THIS IS A RUST PROJECT** - All code in Rust
 - **NO GO CODE** - Unlike Argo Rollouts (Go), we use Rust
 - **STRONG TYPING ONLY** - No `Box<dyn Any>` or runtime type checking
+
+---
+
+## ⛔ RUST CODE QUALITY - INSTANT REJECTION
+
+### No .unwrap() in Production - Ever
+
+❌ **BANNED:**
+```rust
+let name = rollout.metadata.name.unwrap();
+```
+
+✅ **REQUIRED:**
+```rust
+let name = rollout.metadata.name.as_ref()
+    .ok_or(ReconcileError::MissingName)?;
+```
+
+### No println! in Production - Ever
+
+❌ **BANNED:**
+```rust
+println!("Reconciling: {}", name);
+```
+
+✅ **REQUIRED:**
+```rust
+use tracing::info;
+info!(rollout = ?name, "Reconciling");
+```
+
+### No String Enums - Ever
+
+❌ **BANNED:**
+```rust
+phase: Some("Progressing".to_string())
+```
+
+✅ **REQUIRED:**
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum Phase {
+    Initializing,
+    Progressing,
+    Paused,
+    Completed,
+    Failed,
+}
+
+phase: Some(Phase::Progressing)
+```
+
+---
 
 ### Controller Pattern
 
@@ -611,4 +683,238 @@ Test thoroughly (unit tests + integration tests)
 Commit incrementally (small, focused commits)
 
 When in doubt, ask the human for clarification.
+
+
+
+## VERIFICATION CHECKLIST
+
+Before EVERY commit:
+
+```bash
+# 1. Format - MANDATORY
+cargo fmt
+
+# 2. Clippy - MANDATORY  
+cargo clippy -- -D warnings
+
+# 3. Tests - MANDATORY
+cargo test
+
+# 4. No .unwrap() in src/ (except tests)
+find src -name "*.rs" -not -path "*/test*" \
+  -exec grep -l "\.unwrap()" {} \;
+
+# 5. No println! in src/ (except tests)
+find src -name "*.rs" -not -path "*/test*" \
+  -exec grep -l "println!" {} \;
+
+# 6. No TODOs/stubs
+grep -r "TODO\|FIXME\|todo!\|unimplemented!" src/
+
+# 7. All errors are ReconcileError
+# Check that we're not using anyhow::Error in reconcile
+```
+
+---
+
+## AUTOMATED PRE-COMMIT HOOK
+
+Create `.git/hooks/pre-commit` (executable):
+
+```bash
+#!/bin/bash
+# KULTA pre-commit quality checks
+
+echo "🔍 Running KULTA pre-commit checks..."
+
+# Format
+echo "→ cargo fmt..."
+if ! cargo fmt --check; then
+    echo "❌ Run: cargo fmt"
+    exit 1
+fi
+
+# Clippy
+echo "→ cargo clippy..."
+if ! cargo clippy -- -D warnings; then
+    echo "❌ Fix clippy warnings"
+    exit 1
+fi
+
+# No .unwrap() in production
+echo "→ Checking for .unwrap() abuse..."
+if find src -name "*.rs" -not -path "*/test*" -exec grep -l "\.unwrap()" {} \; | grep -v "// ALLOWED:"; then
+    echo "❌ Found .unwrap() in production code"
+    exit 1
+fi
+
+# No println! in production
+echo "→ Checking for println!..."
+if find src -name "*.rs" -not -path "*/test*" -exec grep -l "println!" {} \; | grep -v "// ALLOWED:"; then
+    echo "❌ Found println! in production code. Use tracing"
+    exit 1
+fi
+
+echo "✅ All checks passed!"
+```
+
+Install with:
+```bash
+chmod +x .git/hooks/pre-commit
+```
+
+---
+
+## DESIGN SESSION CHECKLIST
+
+Before writing ANY code, answer these questions:
+
+- [ ] What problem are we solving?
+- [ ] Which K8s resources do we create/update?
+- [ ] What Rollout status fields change?
+- [ ] What CDEvents do we emit?
+- [ ] What Gateway API changes happen?
+- [ ] What's the failure mode?
+- [ ] Can we split into <50 line functions?
+- [ ] What tests validate this?
+- [ ] Draw the state machine
+
+**Example:**
+```
+Problem: Create canary ReplicaSet
+Resources: ReplicaSet (0 replicas)
+Status: phase=Progressing, canaryReplicas=0
+CDEvents: deployment.progressed
+Failures: API error → emit deployment.failed, requeue
+Tests: test_reconcile_creates_canary()
+State: Initializing → Progressing
+```
+
+---
+
+## KUBERNETES CONTROLLER PATTERNS
+
+### Reconciliation Loop
+- **Idempotent operations**: Same input → same output
+- **Called on every resource change**: Add/Update/Delete
+- **Level-triggered, not edge-triggered**: Check desired vs actual state
+
+### Owner References
+- **Parent owns children**: Rollout owns ReplicaSets
+- **Automatic garbage collection**: Delete Rollout → delete ReplicaSets
+- **Cascade deletion**: Kubernetes handles cleanup
+
+### Status Subresource
+- **Spec = desired state**: What user wants
+- **Status = observed state**: What controller sees
+- **Controller reconciles gap**: Drive status → spec
+
+### Label Selectors
+- **Group related resources**: All pods for a Rollout
+- **Enable querying**: `kubectl get pods -l app=myapp`
+- **pod-template-hash pattern**: Track template revisions
+
+---
+
+## TDD EXAMPLE: Complete Walkthrough
+
+### RED Phase: Write Failing Test
+
+```rust
+#[tokio::test]
+async fn test_reconcile_creates_canary_replicaset() {
+    // ARRANGE: Create test Rollout
+    let rollout = create_test_rollout("my-app", 3, "nginx:1.0");
+    let ctx = Arc::new(Context::new_mock());
+
+    // ACT: Reconcile
+    reconcile(Arc::new(rollout.clone()), ctx.clone()).await.unwrap();
+
+    // ASSERT: Canary ReplicaSet exists with 0 replicas
+    // (This will FAIL - canary creation not implemented yet)
+    let canary = get_replicaset(&ctx.client, "my-app-canary").await.unwrap();
+    assert_eq!(canary.spec.unwrap().replicas, Some(0));
+}
+```
+
+**Run:** `cargo test`  
+**Expected:** FAIL ✅ (RED phase confirmed)
+
+---
+
+### GREEN Phase: Minimal Implementation
+
+```rust
+pub async fn reconcile(
+    rollout: Arc<Rollout>,
+    ctx: Arc<Context>,
+) -> Result<Action, ReconcileError> {
+    let namespace = rollout.namespace().ok_or(ReconcileError::MissingNamespace)?;
+
+    // Existing: Create stable ReplicaSet
+    // ... (stable ReplicaSet code)
+
+    // NEW: Create canary ReplicaSet (0 replicas)
+    let canary_rs = build_replicaset(&rollout, "canary", 0);
+    let canary_rs_name = canary_rs.metadata.name.as_ref().unwrap();
+
+    let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
+
+    match rs_api.get(canary_rs_name).await {
+        Ok(_) => info!("Canary ReplicaSet exists"),
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            info!("Creating canary ReplicaSet");
+            rs_api.create(&PostParams::default(), &canary_rs).await?;
+        }
+        Err(e) => return Err(ReconcileError::KubeError(e)),
+    }
+
+    Ok(Action::requeue(Duration::from_secs(300)))
+}
+```
+
+**Run:** `cargo test`  
+**Expected:** PASS ✅ (GREEN phase confirmed)
+
+---
+
+### REFACTOR Phase: Improve Code
+
+**Extract helper function:**
+```rust
+async fn ensure_replicaset_exists(
+    ctx: &Context,
+    namespace: &str,
+    rs: &ReplicaSet,
+) -> Result<(), ReconcileError> {
+    let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), namespace);
+    let rs_name = rs.metadata.name.as_ref().unwrap();
+
+    match rs_api.get(rs_name).await {
+        Ok(_) => {
+            info!(replicaset = ?rs_name, "ReplicaSet exists");
+            Ok(())
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            info!(replicaset = ?rs_name, "Creating ReplicaSet");
+            rs_api.create(&PostParams::default(), rs).await?;
+            Ok(())
+        }
+        Err(e) => Err(ReconcileError::KubeError(e)),
+    }
+}
+```
+
+**Run:** `cargo test`  
+**Expected:** Still PASS ✅ (refactor successful)
+
+**Commit:**
+```bash
+git commit -m "feat: create canary ReplicaSet (0 replicas)
+
+- Add canary ReplicaSet creation after stable
+- Extract ensure_replicaset_exists helper
+- Idempotent (404 = create, existing = skip)
+- Tests: test_reconcile_creates_canary_replicaset passing"
+```
 
