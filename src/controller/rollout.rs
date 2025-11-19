@@ -373,12 +373,30 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
 
+    info!(
+        rollout = ?name,
+        desired_replicas = rollout.spec.replicas,
+        "Building ReplicaSets"
+    );
+
     // Build and ensure stable ReplicaSet exists
     let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas);
+    info!(
+        rollout = ?name,
+        rs_type = "stable",
+        spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
+        "Built stable ReplicaSet"
+    );
     ensure_replicaset_exists(&rs_api, &stable_rs, "stable", rollout.spec.replicas).await?;
 
     // Build and ensure canary ReplicaSet exists (0 replicas initially)
     let canary_rs = build_replicaset(&rollout, "canary", 0);
+    info!(
+        rollout = ?name,
+        rs_type = "canary",
+        spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
+        "Built canary ReplicaSet"
+    );
     ensure_replicaset_exists(&rs_api, &canary_rs, "canary", 0).await?;
 
     // Update HTTPRoute with weighted backends (if configured)
