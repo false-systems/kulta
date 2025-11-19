@@ -4,7 +4,6 @@ use crate::crd::rollout::{
     RolloutStrategy, TrafficRouting,
 };
 use kube::api::ObjectMeta;
-use std::sync::Arc;
 
 #[tokio::test]
 async fn test_reconcile_creates_stable_replicaset() {

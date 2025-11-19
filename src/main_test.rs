@@ -1,7 +1,6 @@
-use std::time::Duration;
-
 #[test]
 fn test_error_policy_returns_requeue() {
+    use std::time::Duration;
     // Test that error_policy function returns correct requeue duration
     // The function signature is:
     //   pub fn error_policy(_rollout: Arc<Rollout>, error: &ReconcileError, _ctx: Arc<Context>) -> Action
