@@ -76,7 +76,6 @@ pub fn compute_pod_template_hash(template: &PodTemplateSpec) -> String {
 /// - Return Ok if ReplicaSet already exists
 /// - Create ReplicaSet if it doesn't exist (404)
 /// - Return Err on other API errors
-#[allow(dead_code)] // Temporarily disabled while CRD schema is fixed
 async fn ensure_replicaset_exists(
     rs_api: &Api<ReplicaSet>,
     rs: &ReplicaSet,
@@ -371,10 +370,6 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         "Reconciling Rollout"
     );
 
-    // TEMPORARILY DISABLED: ReplicaSet creation
-    // (Template data not persisting due to CRD schema issue - will fix with x-kubernetes-preserve-unknown-fields)
-    // For now, testing HTTPRoute update feature only
-    /*
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
 
@@ -385,7 +380,6 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     // Build and ensure canary ReplicaSet exists (0 replicas initially)
     let canary_rs = build_replicaset(&rollout, "canary", 0);
     ensure_replicaset_exists(&rs_api, &canary_rs, "canary", 0).await?;
-    */
 
     // Update HTTPRoute with weighted backends (if configured)
     if let Some(canary_strategy) = &rollout.spec.strategy.canary {

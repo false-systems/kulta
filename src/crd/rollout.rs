@@ -42,8 +42,18 @@ fn default_replicas() -> i32 {
 
 fn any_object(_gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
     use schemars::schema::*;
+    use serde_json::json;
+
     SchemaObject {
         instance_type: Some(InstanceType::Object.into()),
+        extensions: {
+            let mut ext = std::collections::BTreeMap::new();
+            ext.insert(
+                "x-kubernetes-preserve-unknown-fields".to_string(),
+                json!(true),
+            );
+            ext
+        },
         ..Default::default()
     }
     .into()
