@@ -1,7 +1,7 @@
 use super::*;
 use crate::crd::rollout::{
-    CanaryStep, CanaryStrategy, Rollout, RolloutSpec, RolloutStatus,
-    RolloutStrategy,
+    CanaryStep, CanaryStrategy, GatewayAPIRouting, Rollout, RolloutSpec, RolloutStatus,
+    RolloutStrategy, TrafficRouting,
 };
 use kube::api::ObjectMeta;
 use std::sync::Arc;
