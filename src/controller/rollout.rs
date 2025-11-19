@@ -291,8 +291,11 @@ pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
 ///
 /// Creates a ReplicaSet with:
 /// - Name: {rollout-name}-{type} (e.g., "my-app-stable", "my-app-canary")
-/// - Labels: pod-template-hash, rollouts.kulta.io/type
+/// - Labels: pod-template-hash, rollouts.kulta.io/type, rollouts.kulta.io/managed
 /// - Spec: from Rollout's template
+///
+/// The `rollouts.kulta.io/managed=true` label prevents Kubernetes Deployment
+/// controllers from adopting KULTA-managed ReplicaSets.
 pub fn build_replicaset(rollout: &Rollout, rs_type: &str, replicas: i32) -> ReplicaSet {
     let rollout_name = rollout
         .metadata
@@ -314,6 +317,7 @@ pub fn build_replicaset(rollout: &Rollout, rs_type: &str, replicas: i32) -> Repl
 
     labels.insert("pod-template-hash".to_string(), pod_template_hash.clone());
     labels.insert("rollouts.kulta.io/type".to_string(), rs_type.to_string());
+    labels.insert("rollouts.kulta.io/managed".to_string(), "true".to_string());
 
     // Update template metadata
     let mut template_metadata = template.metadata.unwrap_or_default();

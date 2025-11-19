@@ -287,6 +287,118 @@ async fn test_reconcile_creates_canary_replicaset() {
 }
 
 #[tokio::test]
+async fn test_replicaset_has_kulta_managed_label() {
+    // TDD Cycle 15 - RED: Test that KULTA-managed ReplicaSets have unique labels
+    // to prevent adoption by Kubernetes Deployment controllers
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(
+                    vec![("app".to_string(), "test-app".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(
+                        vec![("app".to_string(), "test-app".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:1.0".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: None,
+    };
+
+    let stable_rs = build_replicaset(&rollout, "stable", 3);
+
+    // Verify ReplicaSet metadata has rollouts.kulta.io/managed label
+    let rs_labels = stable_rs.metadata.labels.as_ref().unwrap();
+    assert_eq!(
+        rs_labels.get("rollouts.kulta.io/managed"),
+        Some(&"true".to_string()),
+        "ReplicaSet must have rollouts.kulta.io/managed=true label to prevent Deployment adoption"
+    );
+
+    // Verify pod template labels have rollouts.kulta.io/managed label
+    let pod_labels = stable_rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .template
+        .as_ref()
+        .unwrap()
+        .metadata
+        .as_ref()
+        .unwrap()
+        .labels
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        pod_labels.get("rollouts.kulta.io/managed"),
+        Some(&"true".to_string()),
+        "Pod template must have rollouts.kulta.io/managed=true label"
+    );
+
+    // Verify selector includes rollouts.kulta.io/managed label
+    let selector_labels = stable_rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .selector
+        .match_labels
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        selector_labels.get("rollouts.kulta.io/managed"),
+        Some(&"true".to_string()),
+        "Selector must include rollouts.kulta.io/managed=true to prevent Deployment adoption"
+    );
+
+    // Verify canary also has the label
+    let canary_rs = build_replicaset(&rollout, "canary", 0);
+    let canary_selector_labels = canary_rs
+        .spec
+        .as_ref()
+        .unwrap()
+        .selector
+        .match_labels
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        canary_selector_labels.get("rollouts.kulta.io/managed"),
+        Some(&"true".to_string()),
+        "Canary selector must also include rollouts.kulta.io/managed=true"
+    );
+}
+
+#[tokio::test]
 async fn test_build_both_stable_and_canary_replicasets() {
     // Test that we can build both stable and canary ReplicaSets
     // This test ensures both types are buildable before reconcile uses them
