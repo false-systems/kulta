@@ -143,18 +143,78 @@ I'm using Gateway API for traffic routing instead of a service mesh because:
 
 ## Architecture
 
+### How It Works
+
 ```
-User applies Rollout YAML
+┌─────────────────────────────────────────────────────────┐
+│  Kubernetes Cluster                                     │
+│                                                         │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  User applies Rollout YAML                      │   │
+│  └──────────────────┬──────────────────────────────┘   │
+│                     │                                   │
+│                     ↓                                   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  KULTA Controller (this project)                │   │
+│  │  ┌───────────────────────────────────────────┐  │   │
+│  │  │  Reconciliation Loop                      │  │   │
+│  │  │  1. Read Rollout spec                     │  │   │
+│  │  │  2. Create/update stable ReplicaSet       │  │   │
+│  │  │  3. Create/update canary ReplicaSet       │  │   │
+│  │  │  4. Update HTTPRoute weights (20/80)      │  │   │
+│  │  │  5. Check if pause duration elapsed       │  │   │
+│  │  │  6. Progress to next step (50/50)         │  │   │
+│  │  │  7. Wait for manual promotion             │  │   │
+│  │  │  8. Final step (100/0 - fully canary)     │  │   │
+│  │  └───────────────────────────────────────────┘  │   │
+│  └──────────────────┬──────────────────────────────┘   │
+│                     │                                   │
+│                     ↓                                   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  Gateway API HTTPRoute                          │   │
+│  │  - stable backend (80% → 50% → 0%)              │   │
+│  │  - canary backend (20% → 50% → 100%)            │   │
+│  └──────────────────┬──────────────────────────────┘   │
+│                     │                                   │
+│                     ↓                                   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  Gateway API Implementation                     │   │
+│  │  (RAUTA, Envoy Gateway, etc.)                   │   │
+│  │  - Routes traffic based on weights              │   │
+│  └──────────────────┬──────────────────────────────┘   │
+│                     │                                   │
+│                     ↓                                   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │  Pods                                           │   │
+│  │  ┌──────────────┐  ┌──────────────┐            │   │
+│  │  │ Stable Pods  │  │ Canary Pods  │            │   │
+│  │  │ (old version)│  │ (new version)│            │   │
+│  │  └──────────────┘  └──────────────┘            │   │
+│  └─────────────────────────────────────────────────┘   │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Component Interaction
+
+```
+Rollout CRD
+    │
+    │ defines canary strategy
+    │
     ↓
-KULTA Controller reconciles
-    ├─ Creates stable ReplicaSet
-    ├─ Creates canary ReplicaSet
-    ├─ Updates HTTPRoute weights
-    └─ Progresses through steps
-    ↓
-Gateway API implementation (RAUTA, etc.)
-    ↓
-Routes traffic based on weights
+KULTA Controller
+    │
+    ├─→ ReplicaSets (stable + canary)
+    │   │
+    │   └─→ Pods with labels
+    │       - rollouts.kulta.io/type=stable
+    │       - rollouts.kulta.io/type=canary
+    │
+    └─→ HTTPRoute (Gateway API)
+        │
+        ├─→ backendRefs[0]: stable service (weight: 80 → 50 → 0)
+        └─→ backendRefs[1]: canary service (weight: 20 → 50 → 100)
 ```
 
 ---
