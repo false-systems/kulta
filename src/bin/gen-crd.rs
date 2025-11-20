@@ -1,5 +1,5 @@
-use kulta::crd::rollout::Rollout;
 use kube::CustomResourceExt;
+use kulta::crd::rollout::Rollout;
 
 fn main() {
     // Generate CRD and print as JSON (kubectl accepts JSON)

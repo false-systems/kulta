@@ -443,7 +443,8 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                     plural: "httproutes".to_string(),
                 };
 
-                let httproute_api: Api<DynamicObject> = Api::namespaced_with(ctx.client.clone(), &namespace, &ar);
+                let httproute_api: Api<DynamicObject> =
+                    Api::namespaced_with(ctx.client.clone(), &namespace, &ar);
 
                 // Apply the patch (Merge patch doesn't support force)
                 match httproute_api
