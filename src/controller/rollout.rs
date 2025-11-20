@@ -287,6 +287,174 @@ pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
     (stable_weight, canary_weight)
 }
 
+/// Initialize RolloutStatus for a new Rollout
+///
+/// Sets up initial status with:
+/// - current_step_index = 0 (first step)
+/// - phase = "Progressing"
+/// - current_weight from first step's setWeight
+///
+/// # Arguments
+/// * `rollout` - The Rollout to initialize status for
+///
+/// # Returns
+/// RolloutStatus with initial values
+pub fn initialize_rollout_status(rollout: &Rollout) -> crate::crd::rollout::RolloutStatus {
+    use crate::crd::rollout::RolloutStatus;
+
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => {
+            // No canary strategy - return default status
+            return RolloutStatus::default();
+        }
+    };
+
+    // Get weight from first step (step 0)
+    let first_step_weight = canary_strategy
+        .steps
+        .first()
+        .and_then(|step| step.set_weight)
+        .unwrap_or(0);
+
+    RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(first_step_weight),
+        phase: Some("Progressing".to_string()),
+        message: Some(format!(
+            "Starting canary rollout at step 0 ({}% traffic)",
+            first_step_weight
+        )),
+        ..Default::default()
+    }
+}
+
+/// Check if rollout should progress to next step
+///
+/// Returns true if:
+/// - Current step has no pause defined
+/// - Phase is not "Paused"
+///
+/// # Arguments
+/// * `rollout` - The Rollout to check
+///
+/// # Returns
+/// true if should progress, false if should wait
+pub fn should_progress_to_next_step(rollout: &Rollout) -> bool {
+    // Get current status
+    let status = match &rollout.status {
+        Some(status) => status,
+        None => return false, // No status yet, can't progress
+    };
+
+    // If phase is Paused, don't progress
+    if status.phase.as_deref() == Some("Paused") {
+        return false;
+    }
+
+    // Get current step index
+    let current_step_index = match status.current_step_index {
+        Some(idx) => idx,
+        None => return false, // No step index, can't progress
+    };
+
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => return false, // No canary strategy
+    };
+
+    // Get current step
+    let current_step = match canary_strategy.steps.get(current_step_index as usize) {
+        Some(step) => step,
+        None => return false, // Invalid step index
+    };
+
+    // If current step has pause, don't progress
+    if current_step.pause.is_some() {
+        return false;
+    }
+
+    // No pause - can progress
+    true
+}
+
+/// Advance rollout to next step
+///
+/// Calculates new status with:
+/// - current_step_index incremented
+/// - current_weight from new step
+/// - phase = "Completed" if last step, else "Progressing"
+///
+/// # Arguments
+/// * `rollout` - The Rollout to advance
+///
+/// # Returns
+/// New RolloutStatus with updated step
+pub fn advance_to_next_step(rollout: &Rollout) -> crate::crd::rollout::RolloutStatus {
+    use crate::crd::rollout::RolloutStatus;
+
+    // Get current status
+    let current_status = match &rollout.status {
+        Some(status) => status,
+        None => {
+            // No status yet - initialize
+            return initialize_rollout_status(rollout);
+        }
+    };
+
+    // Get current step index
+    let current_step_index = current_status.current_step_index.unwrap_or(-1);
+    let next_step_index = current_step_index + 1;
+
+    // Get canary strategy
+    let canary_strategy = match &rollout.spec.strategy.canary {
+        Some(strategy) => strategy,
+        None => {
+            // No canary strategy - return current status
+            return current_status.clone();
+        }
+    };
+
+    // Check if next step exists
+    if next_step_index as usize >= canary_strategy.steps.len() {
+        // Reached end of steps - mark as completed
+        return RolloutStatus {
+            current_step_index: Some(next_step_index),
+            current_weight: Some(100),
+            phase: Some("Completed".to_string()),
+            message: Some("Rollout completed: 100% traffic to canary".to_string()),
+            ..current_status.clone()
+        };
+    }
+
+    // Get weight from next step
+    let next_step = &canary_strategy.steps[next_step_index as usize];
+    let next_weight = next_step.set_weight.unwrap_or(0);
+
+    // Check if this is the final step (100% canary)
+    let (phase, message) = if next_weight == 100 {
+        (
+            "Completed".to_string(),
+            "Rollout completed: 100% traffic to canary".to_string(),
+        )
+    } else {
+        (
+            "Progressing".to_string(),
+            format!("Advanced to step {} ({}% traffic)", next_step_index, next_weight),
+        )
+    };
+
+    RolloutStatus {
+        current_step_index: Some(next_step_index),
+        current_weight: Some(next_weight),
+        phase: Some(phase),
+        message: Some(message),
+        ..current_status.clone()
+    }
+}
+
 /// Build a ReplicaSet for a Rollout
 ///
 /// Creates a ReplicaSet with:

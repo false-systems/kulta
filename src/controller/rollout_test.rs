@@ -971,3 +971,248 @@ async fn test_update_httproute_with_weighted_backends() {
     assert_eq!(canary.weight, Some(20));
 }
 */
+
+// TDD Cycle 16: Automatic Step Progression
+// RED: Test that reconcile progresses through canary steps automatically
+
+#[tokio::test]
+async fn test_initialize_rollout_status() {
+    // Test that a new Rollout gets initialized with status.currentStepIndex = 0
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: None, // No status yet - should be initialized
+    };
+
+    // Function to test: initialize_rollout_status
+    // Should return a RolloutStatus with:
+    // - current_step_index = 0 (start at first step)
+    // - phase = "Progressing"
+    // - current_weight = 20 (from step 0)
+    let status = initialize_rollout_status(&rollout);
+
+    assert_eq!(status.current_step_index, Some(0));
+    assert_eq!(status.phase, Some("Progressing".to_string()));
+    assert_eq!(status.current_weight, Some(20));
+    assert_eq!(status.message, Some("Starting canary rollout at step 0 (20% traffic)".to_string()));
+}
+
+#[tokio::test]
+async fn test_should_progress_to_next_step() {
+    // Test that we detect when it's time to progress to the next step
+    // For now: progress immediately (no pause, no analysis)
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None, // No pause - should progress immediately
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0),
+            phase: Some("Progressing".to_string()),
+            ..Default::default()
+        }),
+    };
+
+    // Function to test: should_progress_to_next_step
+    // Returns true if:
+    // - No pause defined in current step
+    // - (Future: metrics look good)
+    let should_progress = should_progress_to_next_step(&rollout);
+
+    assert!(should_progress, "Should progress when no pause is defined");
+}
+
+#[tokio::test]
+async fn test_should_not_progress_when_paused() {
+    // Test that we DON'T progress when current step has pause
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: Some(crate::crd::rollout::PauseDuration {
+                                duration: Some("5m".to_string()),
+                            }),
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0),
+            phase: Some("Paused".to_string()), // Currently paused
+            ..Default::default()
+        }),
+    };
+
+    let should_progress = should_progress_to_next_step(&rollout);
+
+    assert!(!should_progress, "Should NOT progress when paused");
+}
+
+#[tokio::test]
+async fn test_advance_to_next_step() {
+    // Test advancing from step 0 to step 1
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0),
+            current_weight: Some(20),
+            phase: Some("Progressing".to_string()),
+            ..Default::default()
+        }),
+    };
+
+    // Function to test: advance_to_next_step
+    // Returns new RolloutStatus with:
+    // - current_step_index = 1
+    // - current_weight = 50
+    // - phase = "Progressing"
+    let new_status = advance_to_next_step(&rollout);
+
+    assert_eq!(new_status.current_step_index, Some(1));
+    assert_eq!(new_status.current_weight, Some(50));
+    assert_eq!(new_status.phase, Some("Progressing".to_string()));
+    assert_eq!(new_status.message, Some("Advanced to step 1 (50% traffic)".to_string()));
+}
+
+#[tokio::test]
+async fn test_advance_to_final_step() {
+    // Test advancing to the last step marks rollout as Complete
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(100), // Final step: 100% canary
+                            pause: None,
+                        },
+                    ],
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0),
+            current_weight: Some(20),
+            phase: Some("Progressing".to_string()),
+            ..Default::default()
+        }),
+    };
+
+    // Advance from step 0 to step 1 (final step)
+    let new_status = advance_to_next_step(&rollout);
+
+    assert_eq!(new_status.current_step_index, Some(1));
+    assert_eq!(new_status.current_weight, Some(100));
+
+    // When reaching final step (100% canary), phase should be "Completed"
+    assert_eq!(new_status.phase, Some("Completed".to_string()));
+    assert_eq!(new_status.message, Some("Rollout completed: 100% traffic to canary".to_string()));
+}
