@@ -5,6 +5,55 @@ use crate::crd::rollout::{
 };
 use kube::api::ObjectMeta;
 
+// Helper function to create a test Rollout with canary strategy
+fn create_test_rollout_with_canary() -> Rollout {
+    Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(
+                    vec![("app".to_string(), "test-app".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(
+                        vec![("app".to_string(), "test-app".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:1.0".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            strategy: RolloutStrategy {
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![],  // Tests will set their own steps
+                    traffic_routing: None,
+                }),
+            },
+        },
+        status: None,
+    }
+}
+
 #[tokio::test]
 async fn test_reconcile_creates_stable_replicaset() {
     // Create a mock Rollout resource
@@ -1412,4 +1461,292 @@ fn test_parse_duration_empty_string() {
 fn test_parse_duration_no_number() {
     let duration = parse_duration("s");
     assert!(duration.is_none(), "Should return None when no number");
+}
+
+// TDD Cycle 18: Time-based Pause Progression
+
+#[test]
+fn test_should_progress_when_pause_duration_elapsed() {
+    use crate::crd::rollout::{CanaryStep, PauseDuration, RolloutStatus};
+    use chrono::{Duration, Utc};
+
+    // Create a rollout with a step that has a 5m pause
+    let mut rollout = create_test_rollout_with_canary();
+
+    // Set step with 5 minute pause
+    if let Some(ref mut canary) = rollout.spec.strategy.canary {
+        canary.steps = vec![
+            CanaryStep {
+                set_weight: Some(20),
+                pause: Some(PauseDuration {
+                    duration: Some("5m".to_string()),
+                }),
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+    }
+
+    // Set status with pause that started 6 minutes ago
+    let pause_start = Utc::now() - Duration::minutes(6);
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(20),
+        phase: Some("Progressing".to_string()),
+        message: Some("At step 0".to_string()),
+        pause_start_time: Some(pause_start.to_rfc3339()),
+        ..Default::default()
+    });
+
+    // Should progress because duration elapsed
+    assert!(
+        should_progress_to_next_step(&rollout),
+        "Should progress when pause duration elapsed"
+    );
+}
+
+#[test]
+fn test_should_not_progress_when_pause_duration_not_elapsed() {
+    use crate::crd::rollout::{CanaryStep, PauseDuration, RolloutStatus};
+    use chrono::{Duration, Utc};
+
+    // Create a rollout with a step that has a 5m pause
+    let mut rollout = create_test_rollout_with_canary();
+
+    // Set step with 5 minute pause
+    if let Some(ref mut canary) = rollout.spec.strategy.canary {
+        canary.steps = vec![
+            CanaryStep {
+                set_weight: Some(20),
+                pause: Some(PauseDuration {
+                    duration: Some("5m".to_string()),
+                }),
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+    }
+
+    // Set status with pause that started 2 minutes ago
+    let pause_start = Utc::now() - Duration::minutes(2);
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(20),
+        phase: Some("Progressing".to_string()),
+        message: Some("At step 0".to_string()),
+        pause_start_time: Some(pause_start.to_rfc3339()),
+        ..Default::default()
+    });
+
+    // Should NOT progress because duration not elapsed
+    assert!(
+        !should_progress_to_next_step(&rollout),
+        "Should not progress when pause duration not elapsed"
+    );
+}
+
+#[test]
+fn test_advance_sets_pause_start_time() {
+    use crate::crd::rollout::{CanaryStep, PauseDuration, RolloutStatus};
+
+    // Create rollout with step that has pause
+    let mut rollout = create_test_rollout_with_canary();
+
+    // Set step with pause
+    if let Some(ref mut canary) = rollout.spec.strategy.canary {
+        canary.steps = vec![
+            CanaryStep {
+                set_weight: Some(20),
+                pause: Some(PauseDuration {
+                    duration: Some("5m".to_string()),
+                }),
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+    }
+
+    // Set initial status (before step 0)
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(-1),
+        current_weight: Some(0),
+        phase: Some("Initializing".to_string()),
+        message: Some("Starting".to_string()),
+        pause_start_time: None,
+        ..Default::default()
+    });
+
+    // Advance to step 0 (which has pause)
+    let new_status = advance_to_next_step(&rollout);
+
+    // Should set pause_start_time
+    assert!(
+        new_status.pause_start_time.is_some(),
+        "Should set pause_start_time when advancing to step with pause"
+    );
+
+    // Verify it's a valid RFC3339 timestamp
+    use chrono::DateTime;
+    let timestamp = new_status.pause_start_time.unwrap();
+    assert!(
+        DateTime::parse_from_rfc3339(&timestamp).is_ok(),
+        "pause_start_time should be valid RFC3339"
+    );
+}
+
+#[test]
+fn test_advance_clears_pause_start_time_when_no_pause() {
+    use crate::crd::rollout::{CanaryStep, PauseDuration, RolloutStatus};
+
+    // Create rollout with step that has no pause
+    let mut rollout = create_test_rollout_with_canary();
+
+    // Set steps: first has pause, second doesn't
+    if let Some(ref mut canary) = rollout.spec.strategy.canary {
+        canary.steps = vec![
+            CanaryStep {
+                set_weight: Some(20),
+                pause: Some(PauseDuration {
+                    duration: Some("5m".to_string()),
+                }),
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+    }
+
+    // Set status at step 0 with pause_start_time set
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(20),
+        phase: Some("Progressing".to_string()),
+        message: Some("At step 0".to_string()),
+        pause_start_time: Some("2025-01-01T00:00:00Z".to_string()),
+        ..Default::default()
+    });
+
+    // Advance to step 1 (which has no pause)
+    let new_status = advance_to_next_step(&rollout);
+
+    // Should clear pause_start_time
+    assert!(
+        new_status.pause_start_time.is_none(),
+        "Should clear pause_start_time when advancing to step without pause"
+    );
+}
+
+// TDD Cycle 18: Manual Promotion
+
+#[test]
+fn test_has_promote_annotation() {
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::BTreeMap;
+
+    // Create rollout with promote annotation
+    let mut rollout = create_test_rollout_with_canary();
+
+    let mut annotations = BTreeMap::new();
+    annotations.insert("kulta.io/promote".to_string(), "true".to_string());
+
+    rollout.metadata = ObjectMeta {
+        name: Some("test".to_string()),
+        namespace: Some("default".to_string()),
+        annotations: Some(annotations),
+        ..Default::default()
+    };
+
+    // has_promote_annotation is private, so we test through should_progress_to_next_step
+    // which calls it internally
+
+    // Add a pause step
+    use crate::crd::rollout::{CanaryStep, PauseDuration, RolloutStatus};
+    if let Some(ref mut canary) = rollout.spec.strategy.canary {
+        canary.steps = vec![
+            CanaryStep {
+                set_weight: Some(20),
+                pause: Some(PauseDuration { duration: None }), // Indefinite pause
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+    }
+
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(20),
+        phase: Some("Progressing".to_string()),
+        message: Some("At step 0".to_string()),
+        pause_start_time: Some("2025-01-01T00:00:00Z".to_string()),
+        ..Default::default()
+    });
+
+    // Should progress due to promote annotation
+    assert!(
+        should_progress_to_next_step(&rollout),
+        "Should progress when promote annotation is set"
+    );
+}
+
+#[test]
+fn test_should_progress_when_promoted() {
+    use crate::crd::rollout::{CanaryStep, PauseDuration, RolloutStatus};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::BTreeMap;
+
+    // Create rollout with indefinite pause
+    let mut rollout = create_test_rollout_with_canary();
+
+    if let Some(ref mut canary) = rollout.spec.strategy.canary {
+        canary.steps = vec![
+            CanaryStep {
+                set_weight: Some(20),
+                pause: Some(PauseDuration { duration: None }), // Indefinite pause
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+    }
+
+    // Set status at paused step
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(20),
+        phase: Some("Progressing".to_string()),
+        message: Some("At step 0".to_string()),
+        pause_start_time: Some("2025-01-01T00:00:00Z".to_string()),
+        ..Default::default()
+    });
+
+    // WITHOUT annotation - should not progress
+    assert!(
+        !should_progress_to_next_step(&rollout),
+        "Should not progress indefinite pause without promotion"
+    );
+
+    // WITH annotation - should progress
+    let mut annotations = BTreeMap::new();
+    annotations.insert("kulta.io/promote".to_string(), "true".to_string());
+    rollout.metadata = ObjectMeta {
+        name: Some("test".to_string()),
+        namespace: Some("default".to_string()),
+        annotations: Some(annotations),
+        ..Default::default()
+    };
+
+    assert!(
+        should_progress_to_next_step(&rollout),
+        "Should progress indefinite pause with promotion annotation"
+    );
 }

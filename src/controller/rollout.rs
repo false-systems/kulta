@@ -1,4 +1,5 @@
 use crate::crd::rollout::Rollout;
+use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use k8s_openapi::api::apps::v1::{ReplicaSet, ReplicaSetSpec};
 use k8s_openapi::api::core::v1::PodTemplateSpec;
@@ -371,8 +372,33 @@ pub fn should_progress_to_next_step(rollout: &Rollout) -> bool {
         None => return false, // Invalid step index
     };
 
-    // If current step has pause, don't progress
-    if current_step.pause.is_some() {
+    // Check if current step has pause
+    if let Some(pause) = &current_step.pause {
+        // Check for manual promotion annotation
+        if has_promote_annotation(rollout) {
+            return true; // Manual promotion overrides pause
+        }
+
+        // If pause has duration, check if elapsed
+        if let Some(duration_str) = &pause.duration {
+            if let Some(duration) = parse_duration(duration_str) {
+                // Check if pause started
+                if let Some(pause_start_str) = &status.pause_start_time {
+                    // Parse pause start time (RFC3339)
+                    if let Ok(pause_start) = DateTime::parse_from_rfc3339(pause_start_str) {
+                        let now = Utc::now();
+                        let elapsed = now.signed_duration_since(pause_start);
+
+                        // If duration elapsed, can progress
+                        if elapsed.num_seconds() >= duration.as_secs() as i64 {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pause is active and duration not elapsed
         return false;
     }
 
@@ -479,11 +505,21 @@ pub fn advance_to_next_step(rollout: &Rollout) -> crate::crd::rollout::RolloutSt
         )
     };
 
+    // Check if next step has pause - set pause start time
+    let pause_start_time = if next_step.pause.is_some() {
+        // Set pause start time to now (RFC3339)
+        Some(Utc::now().to_rfc3339())
+    } else {
+        // Clear pause start time if no pause
+        None
+    };
+
     RolloutStatus {
         current_step_index: Some(next_step_index),
         current_weight: Some(next_weight),
         phase: Some(phase),
         message: Some(message),
+        pause_start_time,
         ..current_status.clone()
     }
 }
@@ -767,6 +803,27 @@ pub fn parse_duration(duration_str: &str) -> Option<Duration> {
         'h' => Some(Duration::from_secs(number * 3600)),
         _ => None,
     }
+}
+
+/// Check if Rollout has the promote annotation (kulta.io/promote=true)
+///
+/// This annotation is used to manually promote a rollout that is paused.
+/// When present with value "true", the controller will progress to the next step
+/// regardless of pause duration.
+///
+/// # Arguments
+/// * `rollout` - The Rollout to check
+///
+/// # Returns
+/// true if annotation exists with value "true", false otherwise
+fn has_promote_annotation(rollout: &Rollout) -> bool {
+    rollout
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|annotations| annotations.get("kulta.io/promote"))
+        .map(|value| value == "true")
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -29,5 +29,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "1"
 
+# Date/time for RFC3339 parsing
+chrono = { version = "0.4", features = ["serde"] }
+
 [dev-dependencies]
 serde_yaml = "0.9"
