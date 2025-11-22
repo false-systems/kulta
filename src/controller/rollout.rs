@@ -33,7 +33,6 @@ pub enum ReconcileError {
 
     #[error("Failed to serialize PodTemplateSpec: {0}")]
     SerializationError(String),
-
 }
 
 pub struct Context {
