@@ -761,8 +761,22 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         }
     }
 
+    // Check if promote annotation exists BEFORE computing status (to avoid race condition)
+    let had_promote_annotation = has_promote_annotation(&rollout);
+    let was_paused_before = rollout
+        .status
+        .as_ref()
+        .map(|s| s.phase == Some(Phase::Paused))
+        .unwrap_or(false);
+
     // Compute desired status (initialize or progress steps)
     let desired_status = compute_desired_status(&rollout);
+
+    // Determine if we actually progressed due to the annotation
+    // Only remove annotation if: had annotation AND was paused AND now progressing
+    let progressed_due_to_annotation = had_promote_annotation
+        && was_paused_before
+        && rollout.status.as_ref() != Some(&desired_status);
 
     // Update Rollout status in Kubernetes if it changed
     if rollout.status.as_ref() != Some(&desired_status) {
@@ -794,8 +808,8 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                     "Status updated successfully"
                 );
 
-                // If promotion annotation was used, remove it to prevent repeated promotions
-                if has_promote_annotation(&rollout) {
+                // Remove promote annotation only if it was actually used for progression
+                if progressed_due_to_annotation {
                     info!(
                         rollout = ?name,
                         "Removing promote annotation after successful promotion"
