@@ -31,7 +31,7 @@ target_rps = 1000
 enabled = false
 interface = "eth0"
 filter = "tcp port 80 or tcp port 443"
-output_dir = "/tmp/kulta-captures"
+output_dir = "target/test-captures"
 
 [deployment]
 # Test app settings
