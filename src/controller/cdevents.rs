@@ -430,17 +430,17 @@ fn extract_image_from_rollout(rollout: &Rollout) -> Result<String, CDEventsError
         .template
         .spec
         .as_ref()
-        .ok_or_else(|| CDEventsError::Generic("Pod template missing spec".to_string()))?
+        .ok_or_else(|| CDEventsError::Generic("pod template missing spec".to_string()))?
         .containers;
 
     let first_container = containers
         .first()
-        .ok_or_else(|| CDEventsError::Generic("Pod template has no containers".to_string()))?;
+        .ok_or_else(|| CDEventsError::Generic("pod template has no containers".to_string()))?;
 
     let image = first_container
         .image
         .as_ref()
-        .ok_or_else(|| CDEventsError::Generic("Container missing image".to_string()))?;
+        .ok_or_else(|| CDEventsError::Generic("container missing image".to_string()))?;
 
     Ok(image.clone())
 }
