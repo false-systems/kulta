@@ -69,7 +69,7 @@ impl MetricsCollector {
         let mut requests_delta = HashMap::new();
         for (label, current_count) in &current.requests_total {
             let baseline_count = baseline.requests_total.get(label).unwrap_or(&0);
-            requests_delta.insert(label.clone(), current_count - baseline_count);
+            requests_delta.insert(label.clone(), current_count.saturating_sub(*baseline_count));
         }
 
         let total_requests: u64 = requests_delta.values().sum();
