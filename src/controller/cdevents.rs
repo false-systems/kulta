@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Error)]
 pub enum CDEventsError {
-    #[error("CDEvents error: {0}")]
+    #[error("cdevents error: {0}")]
     Generic(String),
 }
 
