@@ -17,6 +17,7 @@ pub enum CDEventsError {
 
 /// CDEvents sink for emitting events
 pub struct CDEventsSink {
+    #[cfg(not(test))]
     #[allow(dead_code)] // Will be used for production HTTP sink
     enabled: bool,
     #[cfg(test)]
