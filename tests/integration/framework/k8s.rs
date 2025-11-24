@@ -55,7 +55,7 @@ pub async fn wait_for_deployment(
 
     loop {
         if start.elapsed().as_secs() > timeout_secs {
-            return Err(format!("Timeout waiting for deployment: {}", name).into());
+            return Err(format!("timeout waiting for deployment: {}", name).into());
         }
 
         match deployments.get(name).await {
