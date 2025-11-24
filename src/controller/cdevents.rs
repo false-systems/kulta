@@ -139,12 +139,12 @@ fn build_service_deployed_event(
         .metadata
         .namespace
         .as_ref()
-        .ok_or_else(|| CDEventsError::Generic("Rollout missing namespace".to_string()))?;
+        .ok_or_else(|| CDEventsError::Generic("rollout missing namespace".to_string()))?;
     let name = rollout
         .metadata
         .name
         .as_ref()
-        .ok_or_else(|| CDEventsError::Generic("Rollout missing name".to_string()))?;
+        .ok_or_else(|| CDEventsError::Generic("rollout missing name".to_string()))?;
 
     // Build CDEvent
     let cdevent = CDEvent::from(
