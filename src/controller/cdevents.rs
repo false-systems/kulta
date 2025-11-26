@@ -18,8 +18,9 @@ pub enum CDEventsError {
 /// CDEvents sink for emitting events
 pub struct CDEventsSink {
     #[cfg(not(test))]
-    #[allow(dead_code)] // Will be used for production HTTP sink
     enabled: bool,
+    #[cfg(not(test))]
+    sink_url: Option<String>,
     #[cfg(test)]
     mock_events: Arc<Mutex<Vec<Event>>>,
 }
@@ -36,6 +37,7 @@ impl CDEventsSink {
     ///
     /// Configuration from environment variables:
     /// - KULTA_CDEVENTS_ENABLED: "true" to enable CDEvents emission (default: false)
+    /// - KULTA_CDEVENTS_SINK_URL: HTTP endpoint URL for CloudEvents (optional)
     ///
     /// # Returns
     /// A CDEventsSink configured from environment variables
@@ -45,7 +47,9 @@ impl CDEventsSink {
             .unwrap_or_else(|_| "false".to_string())
             == "true";
 
-        CDEventsSink { enabled }
+        let sink_url = std::env::var("KULTA_CDEVENTS_SINK_URL").ok();
+
+        CDEventsSink { enabled, sink_url }
     }
 
     #[cfg(test)]
@@ -66,6 +70,30 @@ impl CDEventsSink {
     fn emit_event(&self, event: Event) {
         self.mock_events.lock().unwrap().push(event);
     }
+
+    /// Send CloudEvent to HTTP sink (production mode)
+    #[cfg(not(test))]
+    async fn send_event(&self, event: &Event) -> Result<(), CDEventsError> {
+        if !self.enabled {
+            return Ok(()); // CDEvents disabled, skip
+        }
+
+        let Some(url) = &self.sink_url else {
+            return Ok(()); // No sink URL configured, skip
+        };
+
+        // Send CloudEvent as JSON via HTTP POST
+        let client = reqwest::Client::new();
+        client
+            .post(url)
+            .header("Content-Type", "application/cloudevents+json")
+            .json(event)
+            .send()
+            .await
+            .map_err(|e| CDEventsError::Generic(format!("HTTP POST failed: {}", e)))?;
+
+        Ok(())
+    }
 }
 
 /// Emit CDEvent based on status transition
@@ -76,7 +104,7 @@ pub async fn emit_status_change_event(
     rollout: &Rollout,
     old_status: &Option<RolloutStatus>,
     new_status: &RolloutStatus,
-    #[cfg_attr(not(test), allow(unused_variables))] sink: &CDEventsSink,
+    sink: &CDEventsSink,
 ) -> Result<(), CDEventsError> {
     use crate::crd::rollout::Phase;
 
@@ -101,42 +129,46 @@ pub async fn emit_status_change_event(
 
     if is_initialization {
         // Build service.deployed event
-        #[cfg_attr(not(test), allow(unused_variables))]
         let event = build_service_deployed_event(rollout, new_status)?;
 
-        // Emit to sink (test only for now)
+        // Emit to sink
         #[cfg(test)]
         sink.emit_event(event);
+        #[cfg(not(test))]
+        sink.send_event(&event).await?;
 
         Ok(())
     } else if is_step_progression {
         // Build service.upgraded event
-        #[cfg_attr(not(test), allow(unused_variables))]
         let event = build_service_upgraded_event(rollout, new_status)?;
 
-        // Emit to sink (test only for now)
+        // Emit to sink
         #[cfg(test)]
         sink.emit_event(event);
+        #[cfg(not(test))]
+        sink.send_event(&event).await?;
 
         Ok(())
     } else if is_rollback {
         // Build service.rolledback event
-        #[cfg_attr(not(test), allow(unused_variables))]
         let event = build_service_rolledback_event(rollout, new_status)?;
 
-        // Emit to sink (test only for now)
+        // Emit to sink
         #[cfg(test)]
         sink.emit_event(event);
+        #[cfg(not(test))]
+        sink.send_event(&event).await?;
 
         Ok(())
     } else if is_completion {
         // Build service.published event
-        #[cfg_attr(not(test), allow(unused_variables))]
         let event = build_service_published_event(rollout, new_status)?;
 
-        // Emit to sink (test only for now)
+        // Emit to sink
         #[cfg(test)]
         sink.emit_event(event);
+        #[cfg(not(test))]
+        sink.send_event(&event).await?;
 
         Ok(())
     } else {
