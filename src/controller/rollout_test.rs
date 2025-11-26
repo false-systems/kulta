@@ -1705,3 +1705,105 @@ fn test_calculate_replica_split_large_count() {
     assert_eq!(canary, 3, "25% of 10 should ceil to 3 canary replicas");
     assert_eq!(stable, 7, "Remaining should be 7 stable replicas");
 }
+
+// TDD Cycle 2: RED - Test that reconcile scales ReplicaSets based on status
+#[tokio::test]
+async fn test_build_replicasets_with_canary_weight() {
+    // ARRANGE: Create rollout with status at 50% canary weight
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.replicas = 3;
+    rollout.status = Some(RolloutStatus {
+        phase: Some(Phase::Progressing),
+        current_step_index: Some(1),
+        current_weight: Some(50), // 50% canary
+        ..Default::default()
+    });
+
+    // ACT: Calculate what replica counts should be
+    let current_weight = rollout.status.as_ref().unwrap().current_weight.unwrap_or(0);
+    let (stable_replicas, canary_replicas) =
+        calculate_replica_split(rollout.spec.replicas, current_weight);
+
+    // Build ReplicaSets with calculated counts
+    let stable_rs = build_replicaset(&rollout, "stable", stable_replicas).unwrap();
+    let canary_rs = build_replicaset(&rollout, "canary", canary_replicas).unwrap();
+
+    // ASSERT: Verify replica counts match the split
+    assert_eq!(
+        stable_rs.spec.as_ref().unwrap().replicas,
+        Some(1),
+        "50% of 3 replicas should give 1 stable replica"
+    );
+    assert_eq!(
+        canary_rs.spec.as_ref().unwrap().replicas,
+        Some(2),
+        "50% of 3 replicas should give 2 canary replicas"
+    );
+}
+
+#[tokio::test]
+async fn test_build_replicasets_at_initialization() {
+    // ARRANGE: Create rollout with no status (initialization)
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.replicas = 3;
+    rollout.status = None; // No status yet
+
+    // ACT: Calculate replica split (should default to 0% canary)
+    let current_weight = rollout
+        .status
+        .as_ref()
+        .and_then(|s| s.current_weight)
+        .unwrap_or(0);
+    let (stable_replicas, canary_replicas) =
+        calculate_replica_split(rollout.spec.replicas, current_weight);
+
+    // Build ReplicaSets
+    let stable_rs = build_replicaset(&rollout, "stable", stable_replicas).unwrap();
+    let canary_rs = build_replicaset(&rollout, "canary", canary_replicas).unwrap();
+
+    // ASSERT: At initialization, all replicas should be stable
+    assert_eq!(
+        stable_rs.spec.as_ref().unwrap().replicas,
+        Some(3),
+        "At initialization, all replicas should be stable"
+    );
+    assert_eq!(
+        canary_rs.spec.as_ref().unwrap().replicas,
+        Some(0),
+        "At initialization, canary should have 0 replicas"
+    );
+}
+
+#[tokio::test]
+async fn test_build_replicasets_at_completion() {
+    // ARRANGE: Create rollout at 100% canary (completed)
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.replicas = 3;
+    rollout.status = Some(RolloutStatus {
+        phase: Some(Phase::Completed),
+        current_step_index: Some(2),
+        current_weight: Some(100), // 100% canary
+        ..Default::default()
+    });
+
+    // ACT: Calculate replica split
+    let current_weight = rollout.status.as_ref().unwrap().current_weight.unwrap_or(0);
+    let (stable_replicas, canary_replicas) =
+        calculate_replica_split(rollout.spec.replicas, current_weight);
+
+    // Build ReplicaSets
+    let stable_rs = build_replicaset(&rollout, "stable", stable_replicas).unwrap();
+    let canary_rs = build_replicaset(&rollout, "canary", canary_replicas).unwrap();
+
+    // ASSERT: At completion, all replicas should be canary
+    assert_eq!(
+        stable_rs.spec.as_ref().unwrap().replicas,
+        Some(0),
+        "At completion, stable should have 0 replicas"
+    );
+    assert_eq!(
+        canary_rs.spec.as_ref().unwrap().replicas,
+        Some(3),
+        "At completion, all replicas should be canary"
+    );
+}

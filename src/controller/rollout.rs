@@ -107,7 +107,6 @@ pub fn compute_pod_template_hash(template: &PodTemplateSpec) -> Result<String, R
 /// assert_eq!(stable, 1); // 50% of 3 → 1 stable, 2 canary (ceil)
 /// assert_eq!(canary, 2);
 /// ```
-#[allow(dead_code)] // Temporary - will be used in reconcile loop
 fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32) {
     // Calculate canary replicas (ceiling to ensure at least 1 if weight > 0)
     let canary_replicas = if canary_weight == 0 {
@@ -691,31 +690,44 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
 
+    // Calculate replica split based on current canary weight
+    let current_weight = rollout
+        .status
+        .as_ref()
+        .and_then(|s| s.current_weight)
+        .unwrap_or(0);
+
+    let (stable_replicas, canary_replicas) =
+        calculate_replica_split(rollout.spec.replicas, current_weight);
+
     info!(
         rollout = ?name,
-        desired_replicas = rollout.spec.replicas,
-        "Building ReplicaSets"
+        total_replicas = rollout.spec.replicas,
+        current_weight = current_weight,
+        stable_replicas = stable_replicas,
+        canary_replicas = canary_replicas,
+        "Calculated ReplicaSet scaling"
     );
 
-    // Build and ensure stable ReplicaSet exists
-    let stable_rs = build_replicaset(&rollout, "stable", rollout.spec.replicas)?;
+    // Build and ensure stable ReplicaSet exists with calculated replicas
+    let stable_rs = build_replicaset(&rollout, "stable", stable_replicas)?;
     info!(
         rollout = ?name,
         rs_type = "stable",
         spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
         "Built stable ReplicaSet"
     );
-    ensure_replicaset_exists(&rs_api, &stable_rs, "stable", rollout.spec.replicas).await?;
+    ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas).await?;
 
-    // Build and ensure canary ReplicaSet exists (0 replicas initially)
-    let canary_rs = build_replicaset(&rollout, "canary", 0)?;
+    // Build and ensure canary ReplicaSet exists with calculated replicas
+    let canary_rs = build_replicaset(&rollout, "canary", canary_replicas)?;
     info!(
         rollout = ?name,
         rs_type = "canary",
         spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
         "Built canary ReplicaSet"
     );
-    ensure_replicaset_exists(&rs_api, &canary_rs, "canary", 0).await?;
+    ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas).await?;
 
     // Update HTTPRoute with weighted backends (if configured)
     if let Some(canary_strategy) = &rollout.spec.strategy.canary {
