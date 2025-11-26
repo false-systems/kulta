@@ -28,7 +28,6 @@ impl CDEventsSink {
     #[cfg(test)]
     pub fn new_mock() -> Self {
         CDEventsSink {
-            enabled: true,
             mock_events: Arc::new(Mutex::new(Vec::new())),
         }
     }

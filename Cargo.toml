@@ -33,7 +33,7 @@ thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 
 # CDEvents observability
-cdevents-sdk = { path = "../sdk-rust/cdevents-sdk", features = ["cloudevents"] }
+cdevents-sdk = { version = "0.2.0", features = ["cloudevents"] }
 cloudevents-sdk = { version = "0.8", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 

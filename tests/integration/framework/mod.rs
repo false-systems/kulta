@@ -83,8 +83,12 @@ pub struct DeploymentConfig {
 impl TestConfig {
     /// Load configuration from tests/integration/config.toml
     pub fn load() -> Result<Self, Box<dyn Error>> {
-        let config_path = std::env::var("KULTA_TEST_CONFIG")
-            .unwrap_or_else(|_| format!("{}/tests/integration/config.toml", env!("CARGO_MANIFEST_DIR")));
+        let config_path = std::env::var("KULTA_TEST_CONFIG").unwrap_or_else(|_| {
+            format!(
+                "{}/tests/integration/config.toml",
+                env!("CARGO_MANIFEST_DIR")
+            )
+        });
         let contents = std::fs::read_to_string(config_path)?;
         let config: TestConfig = toml::from_str(&contents)?;
         Ok(config)
