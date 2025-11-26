@@ -1,3 +1,4 @@
+use crate::controller::cdevents::emit_status_change_event;
 use crate::crd::rollout::{Phase, Rollout};
 use chrono::{DateTime, Utc};
 #[cfg(test)]
@@ -846,6 +847,22 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
             phase = ?desired_status.phase,
             "Updating Rollout status"
         );
+
+        // Emit CDEvent for status change (non-fatal if it fails)
+        if let Err(e) = emit_status_change_event(
+            &rollout,
+            &rollout.status,
+            &desired_status,
+            &ctx.cdevents_sink,
+        )
+        .await
+        {
+            warn!(
+                error = ?e,
+                rollout = ?name,
+                "Failed to emit CDEvent (non-fatal, continuing)"
+            );
+        }
 
         // Create Rollout API client
         use kube::api::{Api, Patch, PatchParams};
