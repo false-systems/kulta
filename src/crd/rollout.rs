@@ -62,6 +62,10 @@ pub struct CanaryStrategy {
     /// Traffic routing configuration
     #[serde(rename = "trafficRouting", skip_serializing_if = "Option::is_none")]
     pub traffic_routing: Option<TrafficRouting>,
+
+    /// Analysis configuration for automated metrics-based rollback
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -95,6 +99,52 @@ pub struct GatewayAPIRouting {
     /// Name of the HTTPRoute to manipulate
     #[serde(rename = "httpRoute")]
     pub http_route: String,
+}
+
+/// Analysis configuration for automated rollback based on metrics
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct AnalysisConfig {
+    /// Prometheus configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prometheus: Option<PrometheusConfig>,
+
+    /// Warmup duration before starting metrics analysis (e.g., "1m", "30s")
+    #[serde(rename = "warmupDuration", skip_serializing_if = "Option::is_none")]
+    pub warmup_duration: Option<String>,
+
+    /// List of metrics to monitor
+    #[serde(default)]
+    pub metrics: Vec<MetricConfig>,
+}
+
+/// Prometheus configuration
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct PrometheusConfig {
+    /// Prometheus server address (e.g., "http://prometheus:9090")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+/// Metric configuration for analysis
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct MetricConfig {
+    /// Metric name/template (error-rate, latency-p95, latency-p99)
+    pub name: String,
+
+    /// Threshold value (metric must be below this)
+    pub threshold: f64,
+
+    /// Check interval (e.g., "30s", "1m")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interval: Option<String>,
+
+    /// Number of consecutive failures before rollback
+    #[serde(rename = "failureThreshold", skip_serializing_if = "Option::is_none")]
+    pub failure_threshold: Option<i32>,
+
+    /// Minimum sample size required for metric evaluation
+    #[serde(rename = "minSampleSize", skip_serializing_if = "Option::is_none")]
+    pub min_sample_size: Option<i32>,
 }
 
 /// Phase of a Rollout
