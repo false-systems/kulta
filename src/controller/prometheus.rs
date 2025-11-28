@@ -93,6 +93,75 @@ fn parse_prometheus_instant_query(json_response: &str) -> Result<f64, Prometheus
     Ok(value)
 }
 
+/// Prometheus client for executing queries
+#[derive(Clone)]
+pub struct PrometheusClient {
+    #[cfg(not(test))]
+    address: String,
+    #[cfg(test)]
+    mock_response: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl PrometheusClient {
+    /// Create new Prometheus client
+    #[cfg(not(test))]
+    pub fn new(address: String) -> Self {
+        Self { address }
+    }
+
+    /// Create mock client for testing
+    #[cfg(test)]
+    pub fn new_mock() -> Self {
+        Self {
+            mock_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Set mock response for testing
+    #[cfg(test)]
+    pub fn set_mock_response(&self, response: String) {
+        if let Ok(mut mock) = self.mock_response.lock() {
+            *mock = Some(response);
+        }
+    }
+
+    /// Execute instant query against Prometheus
+    ///
+    /// Queries the /api/v1/query endpoint and returns the first metric value.
+    #[cfg(not(test))]
+    pub async fn query_instant(&self, query: &str) -> Result<f64, PrometheusError> {
+        let url = format!("{}/api/v1/query", self.address);
+        let client = reqwest::Client::new();
+
+        let response = client
+            .get(&url)
+            .query(&[("query", query)])
+            .send()
+            .await
+            .map_err(|e| PrometheusError::HttpError(format!("HTTP request failed: {}", e)))?;
+
+        let body = response
+            .text()
+            .await
+            .map_err(|e| PrometheusError::HttpError(format!("Failed to read response: {}", e)))?;
+
+        parse_prometheus_instant_query(&body)
+    }
+
+    /// Execute instant query (mock version for tests)
+    #[cfg(test)]
+    pub async fn query_instant(&self, _query: &str) -> Result<f64, PrometheusError> {
+        let mock = self
+            .mock_response
+            .lock()
+            .map_err(|_| PrometheusError::HttpError("Lock poisoned".to_string()))?;
+        let response = mock
+            .as_ref()
+            .ok_or_else(|| PrometheusError::HttpError("No mock response set".to_string()))?;
+        parse_prometheus_instant_query(response)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +239,55 @@ mod tests {
 
         let result = parse_prometheus_instant_query(json_response);
         assert!(matches!(result, Err(PrometheusError::ParseError(_))));
+    }
+
+    // TDD Cycle 2 Part 3: RED - Test executing Prometheus query
+    #[tokio::test]
+    async fn test_prometheus_client_query_instant() {
+        let client = PrometheusClient::new_mock();
+
+        // Mock successful response
+        let mock_response = r#"{
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [
+                    {
+                        "metric": {},
+                        "value": [1234567890, "12.5"]
+                    }
+                ]
+            }
+        }"#;
+        client.set_mock_response(mock_response.to_string());
+
+        // Execute query
+        let query = "rate(http_requests_total[2m])";
+        let result = client.query_instant(query).await;
+
+        match result {
+            Ok(value) => assert_eq!(value, 12.5),
+            Err(e) => panic!("Should successfully query, got error: {}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_prometheus_client_query_no_data() {
+        let client = PrometheusClient::new_mock();
+
+        // Mock empty response
+        let mock_response = r#"{
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": []
+            }
+        }"#;
+        client.set_mock_response(mock_response.to_string());
+
+        let query = "rate(http_requests_total[2m])";
+        let result = client.query_instant(query).await;
+
+        assert!(matches!(result, Err(PrometheusError::NoData)));
     }
 }
