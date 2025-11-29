@@ -1,7 +1,7 @@
 use super::*;
 use crate::crd::rollout::{
-    CanaryStep, CanaryStrategy, GatewayAPIRouting, Phase, Rollout, RolloutSpec, RolloutStatus,
-    RolloutStrategy, TrafficRouting,
+    CanaryStep, CanaryStrategy, GatewayAPIRouting, PauseDuration, Phase, Rollout, RolloutSpec,
+    RolloutStatus, RolloutStrategy, TrafficRouting,
 };
 use kube::api::ObjectMeta;
 
@@ -1849,4 +1849,318 @@ async fn test_context_includes_cdevents_sink() {
 
     // This will fail until we add cdevents_sink field to Context
     let _sink = &ctx.cdevents_sink;
+}
+
+#[tokio::test]
+async fn test_replicaset_scaling_on_weight_change() {
+    // ARRANGE: Create rollout with 10 replicas at step 0 (20% weight)
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.replicas = 10;
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![
+        CanaryStep {
+            set_weight: Some(20), // Step 0: 20% canary
+            pause: None,
+        },
+        CanaryStep {
+            set_weight: Some(50), // Step 1: 50% canary
+            pause: None,
+        },
+    ];
+
+    // Initialize rollout at step 0
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(0),
+        current_weight: Some(20),
+        phase: Some(Phase::Progressing),
+        pause_start_time: None,
+        ..Default::default()
+    });
+
+    // ACT: Calculate replica split for step 0 (20% weight)
+    let (stable_replicas_step0, canary_replicas_step0) =
+        calculate_replica_split(rollout.spec.replicas, 20);
+
+    // Build ReplicaSets for step 0
+    let stable_rs_step0 = build_replicaset(&rollout, "stable", stable_replicas_step0).unwrap();
+    let canary_rs_step0 = build_replicaset(&rollout, "canary", canary_replicas_step0).unwrap();
+
+    // ASSERT: Verify replica counts at step 0 (20% canary)
+    // With 10 replicas total: canary=2 (20%), stable=8 (80%)
+    assert_eq!(
+        canary_rs_step0.spec.as_ref().unwrap().replicas,
+        Some(2),
+        "Canary should have 2 replicas at 20% weight"
+    );
+    assert_eq!(
+        stable_rs_step0.spec.as_ref().unwrap().replicas,
+        Some(8),
+        "Stable should have 8 replicas at 20% weight"
+    );
+
+    // ACT: Progress to step 1 (50% weight)
+    rollout.status = Some(RolloutStatus {
+        current_step_index: Some(1),
+        current_weight: Some(50),
+        phase: Some(Phase::Progressing),
+        pause_start_time: None,
+        ..Default::default()
+    });
+
+    // Calculate replica split for step 1 (50% weight)
+    let (stable_replicas_step1, canary_replicas_step1) =
+        calculate_replica_split(rollout.spec.replicas, 50);
+
+    // Build ReplicaSets for step 1
+    let stable_rs_step1 = build_replicaset(&rollout, "stable", stable_replicas_step1).unwrap();
+    let canary_rs_step1 = build_replicaset(&rollout, "canary", canary_replicas_step1).unwrap();
+
+    // ASSERT: Verify replica counts changed at step 1 (50% weight)
+    // With 10 replicas total: canary=5 (50%), stable=5 (50%)
+    assert_eq!(
+        canary_rs_step1.spec.as_ref().unwrap().replicas,
+        Some(5),
+        "Canary should have 5 replicas at 50% weight"
+    );
+    assert_eq!(
+        stable_rs_step1.spec.as_ref().unwrap().replicas,
+        Some(5),
+        "Stable should have 5 replicas at 50% weight"
+    );
+
+    // ASSERT: Verify the ReplicaSets have the same name but different replica counts
+    // This tests that ensure_replicaset_exists() should SCALE existing RS, not recreate
+    assert_eq!(
+        stable_rs_step0.metadata.name,
+        stable_rs_step1.metadata.name,
+        "Stable ReplicaSet name should remain constant across steps"
+    );
+    assert_eq!(
+        canary_rs_step0.metadata.name,
+        canary_rs_step1.metadata.name,
+        "Canary ReplicaSet name should remain constant across steps"
+    );
+
+    // ASSERT: Verify pod-template-hash labels are the same
+    // (ReplicaSets should only be scaled, not replaced)
+    let stable_hash_step0 = stable_rs_step0
+        .metadata
+        .labels
+        .as_ref()
+        .unwrap()
+        .get("pod-template-hash")
+        .unwrap();
+    let stable_hash_step1 = stable_rs_step1
+        .metadata
+        .labels
+        .as_ref()
+        .unwrap()
+        .get("pod-template-hash")
+        .unwrap();
+    assert_eq!(
+        stable_hash_step0, stable_hash_step1,
+        "Stable ReplicaSet pod-template-hash should not change when scaling"
+    );
+
+    let canary_hash_step0 = canary_rs_step0
+        .metadata
+        .labels
+        .as_ref()
+        .unwrap()
+        .get("pod-template-hash")
+        .unwrap();
+    let canary_hash_step1 = canary_rs_step1
+        .metadata
+        .labels
+        .as_ref()
+        .unwrap()
+        .get("pod-template-hash")
+        .unwrap();
+    assert_eq!(
+        canary_hash_step0, canary_hash_step1,
+        "Canary ReplicaSet pod-template-hash should not change when scaling"
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_negative_replicas() {
+    // ARRANGE: Create rollout with negative replicas
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.replicas = -1;
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with negative replicas error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("spec.replicas must be >= 0"),
+        "Expected negative replicas error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_weight_out_of_range() {
+    // ARRANGE: Create rollout with weight > 100
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![CanaryStep {
+        set_weight: Some(150), // Invalid: > 100
+        pause: None,
+    }];
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with weight range error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("steps[0].setWeight must be 0-100"),
+        "Expected weight range error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_negative_weight() {
+    // ARRANGE: Create rollout with negative weight
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![CanaryStep {
+        set_weight: Some(-10), // Invalid: < 0
+        pause: None,
+    }];
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with weight range error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("steps[0].setWeight must be 0-100"),
+        "Expected weight range error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_invalid_pause_duration() {
+    // ARRANGE: Create rollout with invalid duration format
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![CanaryStep {
+        set_weight: Some(50),
+        pause: Some(PauseDuration {
+            duration: Some("invalid".to_string()), // Invalid format
+        }),
+    }];
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with duration error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("steps[0].pause.duration invalid"),
+        "Expected duration error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_empty_canary_service() {
+    // ARRANGE: Create rollout with empty canary service name
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().canary_service = String::new();
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with empty service name error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("canaryService cannot be empty"),
+        "Expected canary service error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_empty_stable_service() {
+    // ARRANGE: Create rollout with empty stable service name
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().stable_service = String::new();
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with empty service name error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("stableService cannot be empty"),
+        "Expected stable service error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_empty_httproute() {
+    // ARRANGE: Create rollout with empty HTTPRoute name
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().traffic_routing =
+        Some(TrafficRouting {
+            gateway_api: Some(GatewayAPIRouting {
+                http_route: String::new(), // Empty HTTPRoute name
+            }),
+        });
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail with empty HTTPRoute error
+    assert!(result.is_err());
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("httpRoute cannot be empty"),
+        "Expected HTTPRoute error, got: {}",
+        error
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_valid_rollout() {
+    // ARRANGE: Create valid rollout
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.replicas = 5;
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![
+        CanaryStep {
+            set_weight: Some(20),
+            pause: Some(PauseDuration {
+                duration: Some("30s".to_string()),
+            }),
+        },
+        CanaryStep {
+            set_weight: Some(100),
+            pause: None,
+        },
+    ];
+    rollout.spec.strategy.canary.as_mut().unwrap().traffic_routing =
+        Some(TrafficRouting {
+            gateway_api: Some(GatewayAPIRouting {
+                http_route: "my-httproute".to_string(),
+            }),
+        });
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should pass validation
+    assert!(
+        result.is_ok(),
+        "Expected valid rollout to pass, got error: {:?}",
+        result
+    );
 }

@@ -35,6 +35,9 @@ pub enum ReconcileError {
 
     #[error("Failed to serialize PodTemplateSpec: {0}")]
     SerializationError(String),
+
+    #[error("Invalid Rollout spec: {0}")]
+    ValidationError(String),
 }
 
 pub struct Context {
@@ -156,13 +159,51 @@ async fn ensure_replicaset_exists(
         .ok_or(ReconcileError::ReplicaSetMissingName)?;
 
     match rs_api.get(rs_name).await {
-        Ok(_existing) => {
-            // Already exists
-            info!(
-                replicaset = ?rs_name,
-                rs_type = rs_type,
-                "ReplicaSet already exists"
-            );
+        Ok(existing) => {
+            // Check if replicas need scaling
+            let current_replicas = existing
+                .spec
+                .as_ref()
+                .and_then(|s| s.replicas)
+                .unwrap_or(0);
+
+            if current_replicas != replicas {
+                // Replicas need updating - scale the ReplicaSet
+                info!(
+                    replicaset = ?rs_name,
+                    rs_type = rs_type,
+                    current = current_replicas,
+                    desired = replicas,
+                    "Scaling ReplicaSet"
+                );
+
+                // Create scale patch
+                use kube::api::{Patch, PatchParams};
+                let scale_patch = serde_json::json!({
+                    "spec": {
+                        "replicas": replicas
+                    }
+                });
+
+                rs_api
+                    .patch(rs_name, &PatchParams::default(), &Patch::Merge(&scale_patch))
+                    .await?;
+
+                info!(
+                    replicaset = ?rs_name,
+                    rs_type = rs_type,
+                    replicas = replicas,
+                    "ReplicaSet scaled successfully"
+                );
+            } else {
+                // Already at correct scale
+                info!(
+                    replicaset = ?rs_name,
+                    rs_type = rs_type,
+                    replicas = replicas,
+                    "ReplicaSet already at correct scale"
+                );
+            }
         }
         Err(kube::Error::Api(err)) if err.code == 404 => {
             // Not found, create it
@@ -675,6 +716,80 @@ pub fn build_replicaset(
     })
 }
 
+/// Validate Rollout specification
+///
+/// Validates runtime constraints that cannot be enforced via CRD schema.
+/// This is necessary because our current CRD uses x-kubernetes-preserve-unknown-fields.
+///
+/// # Arguments
+/// * `rollout` - The Rollout resource to validate
+///
+/// # Returns
+/// * `Ok(())` - Validation passed
+/// * `Err(String)` - Validation error message
+fn validate_rollout(rollout: &Rollout) -> Result<(), String> {
+    // Validate replicas >= 0
+    if rollout.spec.replicas < 0 {
+        return Err(format!(
+            "spec.replicas must be >= 0, got {}",
+            rollout.spec.replicas
+        ));
+    }
+
+    // Validate canary strategy if present
+    if let Some(canary) = &rollout.spec.strategy.canary {
+        // Validate canary service name is not empty
+        if canary.canary_service.is_empty() {
+            return Err("spec.strategy.canary.canaryService cannot be empty".to_string());
+        }
+
+        // Validate stable service name is not empty
+        if canary.stable_service.is_empty() {
+            return Err("spec.strategy.canary.stableService cannot be empty".to_string());
+        }
+
+        // Validate each step
+        for (i, step) in canary.steps.iter().enumerate() {
+            // Validate weight is in 0-100 range
+            if let Some(weight) = step.set_weight {
+                if weight < 0 || weight > 100 {
+                    return Err(format!(
+                        "steps[{}].setWeight must be 0-100, got {}",
+                        i, weight
+                    ));
+                }
+            }
+
+            // Validate pause duration if present
+            if let Some(pause) = &step.pause {
+                if let Some(duration) = &pause.duration {
+                    if parse_duration(duration).is_none() {
+                        return Err(format!(
+                            "steps[{}].pause.duration invalid: {}",
+                            i, duration
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validate traffic routing if present
+        if let Some(traffic_routing) = &canary.traffic_routing {
+            if let Some(gateway) = &traffic_routing.gateway_api {
+                // Validate HTTPRoute name is not empty
+                if gateway.http_route.is_empty() {
+                    return Err(
+                        "spec.strategy.canary.trafficRouting.gatewayAPI.httpRoute cannot be empty"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Reconcile a Rollout resource
 ///
 /// This function implements the main reconciliation logic:
@@ -700,6 +815,16 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         namespace = ?namespace,
         "Reconciling Rollout"
     );
+
+    // Validate Rollout spec (runtime validation since CRD has no schema)
+    if let Err(validation_error) = validate_rollout(&rollout) {
+        error!(
+            rollout = ?name,
+            error = ?validation_error,
+            "Rollout spec validation failed"
+        );
+        return Err(ReconcileError::ValidationError(validation_error));
+    }
 
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
