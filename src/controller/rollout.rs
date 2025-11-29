@@ -1082,12 +1082,9 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
 /// * Optimal requeue interval (minimum 5s, maximum 300s)
 ///
 /// # Examples
-/// ```
-/// // Paused with 10s duration, 2s elapsed → requeue in ~8s
-/// let pause_start = Utc::now() - chrono::Duration::seconds(2);
-/// let interval = calculate_requeue_interval(Some(&pause_start), Some(Duration::from_secs(10)));
-/// assert!(interval >= Duration::from_secs(5) && interval <= Duration::from_secs(10));
-/// ```
+/// - Paused with 10s duration, 2s elapsed → requeue in ~8s
+/// - Not paused → requeue in default 30s
+/// - No pause info → requeue in default 30s
 fn calculate_requeue_interval(
     pause_start: Option<&DateTime<Utc>>,
     pause_duration: Option<Duration>,
