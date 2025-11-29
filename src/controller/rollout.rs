@@ -1148,15 +1148,21 @@ fn calculate_requeue_interval_from_rollout(rollout: &Rollout, status: &RolloutSt
 /// Parse a duration string like "5m", "30s", "1h" into std::time::Duration
 ///
 /// Supported formats:
-/// - "30s" → 30 seconds
-/// - "5m" → 5 minutes
-/// - "2h" → 2 hours
+/// - "30s" → 30 seconds (max 24h = 86400s)
+/// - "5m" → 5 minutes (max 24h = 1440m)
+/// - "2h" → 2 hours (max 1 week = 168h)
+///
+/// # Validation Rules
+/// - Zero duration is rejected (minimum 1s)
+/// - Seconds limited to 24h (86400s) - use hours for longer durations
+/// - Minutes limited to 24h (1440m) - use hours for longer durations
+/// - Hours limited to 1 week (168h) - prevents typos like "999999h"
 ///
 /// # Arguments
 /// * `duration_str` - Duration string to parse
 ///
 /// # Returns
-/// Some(Duration) if parse successful, None if invalid format
+/// Some(Duration) if parse successful and within limits, None if invalid or out of range
 pub fn parse_duration(duration_str: &str) -> Option<Duration> {
     let duration_str = duration_str.trim();
 
@@ -1171,10 +1177,37 @@ pub fn parse_duration(duration_str: &str) -> Option<Duration> {
     let number_str = &duration_str[..duration_str.len() - 1];
     let number: u64 = number_str.parse().ok()?;
 
+    // Reject zero duration
+    if number == 0 {
+        return None;
+    }
+
+    // Validate and convert based on unit
     match unit {
-        's' => Some(Duration::from_secs(number)),
-        'm' => Some(Duration::from_secs(number * 60)),
-        'h' => Some(Duration::from_secs(number * 3600)),
+        's' => {
+            // Seconds: max 24h (86400s)
+            if number <= 86400 {
+                Some(Duration::from_secs(number))
+            } else {
+                None // Reject: use hours for durations > 24h
+            }
+        }
+        'm' => {
+            // Minutes: max 24h (1440m)
+            if number <= 1440 {
+                Some(Duration::from_secs(number * 60))
+            } else {
+                None // Reject: use hours for durations > 24h
+            }
+        }
+        'h' => {
+            // Hours: max 1 week (168h)
+            if number <= 168 {
+                Some(Duration::from_secs(number * 3600))
+            } else {
+                None // Reject: likely a typo (e.g., "8760h" = 1 year)
+            }
+        }
         _ => None,
     }
 }
