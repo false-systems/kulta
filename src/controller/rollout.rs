@@ -2,8 +2,6 @@ use crate::controller::cdevents::emit_status_change_event;
 use crate::controller::prometheus::PrometheusClient;
 use crate::crd::rollout::{Phase, Rollout, RolloutStatus};
 use chrono::{DateTime, Utc};
-#[cfg(test)]
-use futures::FutureExt; // Only used in test helper new_mock()
 use k8s_openapi::api::apps::v1::{ReplicaSet, ReplicaSetSpec};
 use k8s_openapi::api::core::v1::PodTemplateSpec;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
@@ -62,16 +60,16 @@ impl Context {
     #[cfg(test)]
     #[allow(clippy::unwrap_used)] // Test helper - panicking is acceptable
     pub fn new_mock() -> Self {
-        // For testing, create a mock client
-        // In real tests, we'd use a fake API server
+        // For testing, create a mock client that doesn't require kubeconfig
+        // Use a minimal Config - the client won't actually be used in unit tests
+        let mut config = kube::Config::new("https://localhost:8080".parse().unwrap());
+        config.default_namespace = "default".to_string();
+        config.accept_invalid_certs = true;
+
+        let client = kube::Client::try_from(config).unwrap();
+
         Context {
-            client: kube::Client::try_default()
-                .now_or_never()
-                .unwrap()
-                .unwrap_or_else(|_| {
-                    // If no kubeconfig, create a dummy client for unit tests
-                    panic!("Mock context requires kubeconfig or test environment")
-                }),
+            client,
             cdevents_sink: Arc::new(crate::controller::cdevents::CDEventsSink::new_mock()),
             prometheus_client: Arc::new(PrometheusClient::new_mock()),
         }
