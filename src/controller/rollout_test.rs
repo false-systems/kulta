@@ -2164,3 +2164,105 @@ async fn test_validate_rollout_valid_rollout() {
         result
     );
 }
+
+// ============================================================================
+// Dynamic Requeue Interval Tests (TDD - RED Phase)
+// ============================================================================
+
+#[tokio::test]
+async fn test_calculate_requeue_interval_short_pause() {
+    // ARRANGE: Rollout paused with 10s duration, 2s elapsed
+    let pause_start = Utc::now() - chrono::Duration::seconds(2);
+    let pause_duration = Duration::from_secs(10);
+
+    // ACT: Calculate requeue interval
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+
+    // ASSERT: Should requeue in ~8s (10s - 2s), but at least 5s
+    assert!(
+        requeue >= Duration::from_secs(5) && requeue <= Duration::from_secs(10),
+        "Short pause should requeue in remaining time (5-10s), got {:?}",
+        requeue
+    );
+}
+
+#[tokio::test]
+async fn test_calculate_requeue_interval_long_pause() {
+    // ARRANGE: Rollout paused with 5min duration, 30s elapsed
+    let pause_start = Utc::now() - chrono::Duration::seconds(30);
+    let pause_duration = Duration::from_secs(5 * 60); // 5 minutes
+
+    // ACT: Calculate requeue interval
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+
+    // ASSERT: Should requeue in ~4.5min (270s), but capped at 300s max
+    assert!(
+        requeue >= Duration::from_secs(30) && requeue <= Duration::from_secs(300),
+        "Long pause should requeue in remaining time capped at 300s, got {:?}",
+        requeue
+    );
+}
+
+#[tokio::test]
+async fn test_calculate_requeue_interval_almost_done() {
+    // ARRANGE: Rollout paused with 10s duration, 9s elapsed
+    let pause_start = Utc::now() - chrono::Duration::seconds(9);
+    let pause_duration = Duration::from_secs(10);
+
+    // ACT: Calculate requeue interval
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+
+    // ASSERT: Should requeue in ~1s, but minimum 5s
+    assert_eq!(
+        requeue,
+        Duration::from_secs(5),
+        "Almost-done pause should use minimum 5s requeue"
+    );
+}
+
+#[tokio::test]
+async fn test_calculate_requeue_interval_no_pause() {
+    // ARRANGE: Rollout not paused (no pause_start_time)
+    // ACT: Calculate requeue interval
+    let requeue = calculate_requeue_interval(None, None);
+
+    // ASSERT: Should use default 30s interval
+    assert_eq!(
+        requeue,
+        Duration::from_secs(30),
+        "No pause should use default 30s requeue"
+    );
+}
+
+#[tokio::test]
+async fn test_calculate_requeue_interval_manual_pause() {
+    // ARRANGE: Rollout paused manually (no duration)
+    let pause_start = Utc::now() - chrono::Duration::seconds(60);
+
+    // ACT: Calculate requeue interval
+    let requeue = calculate_requeue_interval(Some(&pause_start), None);
+
+    // ASSERT: Should use default 30s interval
+    assert_eq!(
+        requeue,
+        Duration::from_secs(30),
+        "Manual pause (no duration) should use default 30s requeue"
+    );
+}
+
+#[tokio::test]
+async fn test_calculate_requeue_interval_pause_already_elapsed() {
+    // ARRANGE: Rollout paused with 10s duration, 15s elapsed (past deadline)
+    let pause_start = Utc::now() - chrono::Duration::seconds(15);
+    let pause_duration = Duration::from_secs(10);
+
+    // ACT: Calculate requeue interval
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+
+    // ASSERT: Should use minimum 5s (saturating_sub gives 0, clamped to 5s)
+    assert_eq!(
+        requeue,
+        Duration::from_secs(5),
+        "Elapsed pause should use minimum 5s requeue"
+    );
+}

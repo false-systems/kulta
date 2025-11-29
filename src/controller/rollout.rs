@@ -1,6 +1,6 @@
 use crate::controller::cdevents::emit_status_change_event;
 use crate::controller::prometheus::PrometheusClient;
-use crate::crd::rollout::{Phase, Rollout};
+use crate::crd::rollout::{Phase, Rollout, RolloutStatus};
 use chrono::{DateTime, Utc};
 #[cfg(test)]
 use futures::FutureExt; // Only used in test helper new_mock()
@@ -1066,8 +1066,83 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         }
     }
 
-    // Requeue after 30 seconds for faster pause progression checks
-    Ok(Action::requeue(Duration::from_secs(30)))
+    // Calculate optimal requeue interval based on pause state
+    let requeue_interval = calculate_requeue_interval_from_rollout(&rollout, &desired_status);
+    Ok(Action::requeue(requeue_interval))
+}
+
+/// Calculate optimal requeue interval based on rollout pause state
+///
+/// This function reduces unnecessary API calls by calculating the next check time
+/// based on the pause duration and elapsed time.
+///
+/// # Arguments
+/// * `pause_start` - Optional pause start timestamp
+/// * `pause_duration` - Optional pause duration
+///
+/// # Returns
+/// * Optimal requeue interval (minimum 5s, maximum 300s)
+///
+/// # Examples
+/// ```
+/// // Paused with 10s duration, 2s elapsed → requeue in ~8s
+/// let pause_start = Utc::now() - chrono::Duration::seconds(2);
+/// let interval = calculate_requeue_interval(Some(&pause_start), Some(Duration::from_secs(10)));
+/// assert!(interval >= Duration::from_secs(5) && interval <= Duration::from_secs(10));
+/// ```
+fn calculate_requeue_interval(
+    pause_start: Option<&DateTime<Utc>>,
+    pause_duration: Option<Duration>,
+) -> Duration {
+    const MIN_REQUEUE: Duration = Duration::from_secs(5); // Minimum 5s
+    const MAX_REQUEUE: Duration = Duration::from_secs(300); // Maximum 5min
+    const DEFAULT_REQUEUE: Duration = Duration::from_secs(30); // Default 30s
+
+    match (pause_start, pause_duration) {
+        (Some(start), Some(duration)) => {
+            // Calculate elapsed time since pause started
+            let now = Utc::now();
+            let elapsed = now.signed_duration_since(*start);
+            let elapsed_secs = elapsed.num_seconds().max(0) as u64;
+
+            // Calculate remaining time until pause completes
+            let remaining_secs = duration.as_secs().saturating_sub(elapsed_secs);
+
+            // Clamp to MIN..MAX range
+            let optimal = Duration::from_secs(remaining_secs);
+            optimal.clamp(MIN_REQUEUE, MAX_REQUEUE)
+        }
+        _ => {
+            // No pause or manual pause → use default interval
+            DEFAULT_REQUEUE
+        }
+    }
+}
+
+/// Helper to extract pause information from Rollout and RolloutStatus
+fn calculate_requeue_interval_from_rollout(rollout: &Rollout, status: &RolloutStatus) -> Duration {
+    let pause_start = status
+        .pause_start_time
+        .as_ref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+
+    // Get current step's pause duration
+    let pause_duration = status
+        .current_step_index
+        .and_then(|step_index| {
+            rollout
+                .spec
+                .strategy
+                .canary
+                .as_ref()
+                .and_then(|canary| canary.steps.get(step_index as usize))
+                .and_then(|step| step.pause.as_ref())
+                .and_then(|pause| pause.duration.as_ref())
+                .and_then(|dur_str| parse_duration(dur_str))
+        });
+
+    calculate_requeue_interval(pause_start.as_ref(), pause_duration)
 }
 
 /// Parse a duration string like "5m", "30s", "1h" into std::time::Duration
