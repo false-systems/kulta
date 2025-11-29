@@ -1395,6 +1395,106 @@ fn test_parse_duration_no_number() {
     assert!(duration.is_none(), "Should return None when no number");
 }
 
+// ============================================================================
+// Duration Validation Tests (TDD - RED Phase)
+// ============================================================================
+
+#[test]
+fn test_parse_duration_zero_rejected() {
+    // ARRANGE & ACT: Try to parse zero duration
+    let duration = parse_duration("0s");
+
+    // ASSERT: Should reject zero duration
+    assert!(
+        duration.is_none(),
+        "Zero duration should be rejected (invalid pause)"
+    );
+}
+
+#[test]
+fn test_parse_duration_too_long_rejected() {
+    // ARRANGE & ACT: Try to parse unreasonably long duration (1 year)
+    let duration = parse_duration("8760h"); // 365 days = 8760 hours
+
+    // ASSERT: Should reject durations > 1 week (168h)
+    assert!(
+        duration.is_none(),
+        "Duration > 1 week should be rejected (likely typo)"
+    );
+}
+
+#[test]
+fn test_parse_duration_within_limits_accepted() {
+    // ARRANGE & ACT: Parse duration within reasonable limits
+    let duration = parse_duration("168h"); // Exactly 1 week (maximum)
+
+    // ASSERT: Should accept 1 week duration
+    assert!(
+        duration.is_some(),
+        "Duration of 1 week (168h) should be accepted"
+    );
+    assert_eq!(
+        duration.unwrap(),
+        Duration::from_secs(168 * 3600),
+        "Should parse to correct duration"
+    );
+}
+
+#[test]
+fn test_parse_duration_max_seconds_rejected() {
+    // ARRANGE & ACT: Try to parse > 24h in seconds
+    let duration = parse_duration("86401s"); // 24h + 1s
+
+    // ASSERT: Should reject seconds > 24h
+    assert!(
+        duration.is_none(),
+        "Seconds > 24h should be rejected (use hours instead)"
+    );
+}
+
+#[test]
+fn test_parse_duration_max_minutes_rejected() {
+    // ARRANGE & ACT: Try to parse > 24h in minutes
+    let duration = parse_duration("1441m"); // 24h + 1m
+
+    // ASSERT: Should reject minutes > 24h
+    assert!(
+        duration.is_none(),
+        "Minutes > 24h should be rejected (use hours instead)"
+    );
+}
+
+#[test]
+fn test_parse_duration_reasonable_values_accepted() {
+    // ARRANGE & ACT: Parse reasonable durations
+    let test_cases = vec![
+        ("1s", Duration::from_secs(1)),
+        ("30s", Duration::from_secs(30)),
+        ("86400s", Duration::from_secs(86400)), // Exactly 24h
+        ("1m", Duration::from_secs(60)),
+        ("5m", Duration::from_secs(300)),
+        ("1440m", Duration::from_secs(86400)), // Exactly 24h
+        ("1h", Duration::from_secs(3600)),
+        ("24h", Duration::from_secs(86400)),
+        ("168h", Duration::from_secs(604800)), // Exactly 1 week
+    ];
+
+    for (input, expected) in test_cases {
+        let duration = parse_duration(input);
+        assert!(
+            duration.is_some(),
+            "Reasonable duration '{}' should be accepted",
+            input
+        );
+        assert_eq!(
+            duration.unwrap(),
+            expected,
+            "Duration '{}' should parse correctly",
+            input
+        );
+    }
+}
+
 // TDD Cycle 18: Time-based Pause Progression
 
 #[test]
