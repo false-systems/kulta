@@ -1194,16 +1194,18 @@ pub fn parse_duration(duration_str: &str) -> Option<Duration> {
         }
         'm' => {
             // Minutes: max 24h (1440m)
+            // Use checked_mul to prevent overflow
             if number <= 1440 {
-                Some(Duration::from_secs(number * 60))
+                number.checked_mul(60).map(Duration::from_secs)
             } else {
                 None // Reject: use hours for durations > 24h
             }
         }
         'h' => {
             // Hours: max 1 week (168h)
+            // Use checked_mul to prevent overflow
             if number <= 168 {
-                Some(Duration::from_secs(number * 3600))
+                number.checked_mul(3600).map(Duration::from_secs)
             } else {
                 None // Reject: likely a typo (e.g., "8760h" = 1 year)
             }
