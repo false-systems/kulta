@@ -1396,7 +1396,7 @@ fn test_parse_duration_no_number() {
 }
 
 // ============================================================================
-// Duration Validation Tests (TDD - RED Phase)
+// Duration Validation Tests
 // ============================================================================
 
 #[test]
