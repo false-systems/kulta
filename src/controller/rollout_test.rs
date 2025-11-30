@@ -1929,26 +1929,18 @@ async fn test_build_replicasets_at_completion() {
     );
 }
 
-// TDD Cycle 1 (CDEvents Integration): RED - Test that Context includes CDEventsSink
+// TDD Cycle 1 (CDEvents Integration): Test that Context includes CDEventsSink
 #[tokio::test]
 async fn test_context_includes_cdevents_sink() {
-    use crate::controller::cdevents::CDEventsSink;
+    // ARRANGE & ACT: Create mock context (doesn't require kubeconfig)
+    let ctx = Context::new_mock();
 
-    // ARRANGE: Create mock CDEvents sink
-    let sink = CDEventsSink::new_mock();
-    let client = kube::Client::try_default().await.unwrap();
-
-    // ACT: Create context with both client and sink
-    let ctx = Context::new(client, sink, PrometheusClient::new_mock());
-
-    // ASSERT: Verify both fields exist
-    assert!(
-        ctx.client.apiserver_version().await.is_ok(),
-        "Context should have working client"
-    );
-
-    // This will fail until we add cdevents_sink field to Context
+    // ASSERT: Verify Context has all required fields
+    let _client = &ctx.client;
     let _sink = &ctx.cdevents_sink;
+    let _prometheus = &ctx.prometheus_client;
+
+    // Test passes if compilation succeeds (fields exist)
 }
 
 #[tokio::test]
