@@ -103,12 +103,28 @@ pub struct GatewayAPIRouting {
     pub http_route: String,
 }
 
+/// What to do when Prometheus is unreachable during analysis
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]
+pub enum FailurePolicy {
+    /// Pause rollout until Prometheus recovers (default, safest)
+    #[default]
+    Pause,
+    /// Proceed without metrics (risky)
+    Continue,
+    /// Treat as failure, rollback immediately
+    Rollback,
+}
+
 /// Analysis configuration for automated rollback based on metrics
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct AnalysisConfig {
     /// Prometheus configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prometheus: Option<PrometheusConfig>,
+
+    /// What to do when Prometheus is unreachable
+    #[serde(rename = "failurePolicy", skip_serializing_if = "Option::is_none")]
+    pub failure_policy: Option<FailurePolicy>,
 
     /// Warmup duration before starting metrics analysis (e.g., "1m", "30s")
     #[serde(rename = "warmupDuration", skip_serializing_if = "Option::is_none")]

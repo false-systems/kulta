@@ -77,6 +77,36 @@ fn test_rollout_crd_schema_generation() {
 }
 
 #[test]
+fn test_analysis_failure_policy() {
+    let yaml = r#"
+prometheus:
+  address: http://prometheus:9090
+failurePolicy: Pause
+warmupDuration: 60s
+metrics:
+  - name: error-rate
+    threshold: 0.01
+"#;
+
+    let config: AnalysisConfig = serde_yaml::from_str(yaml).expect("deserialize");
+    assert_eq!(config.failure_policy, Some(FailurePolicy::Pause));
+
+    // Test all variants serialize correctly
+    assert_eq!(
+        serde_json::to_string(&FailurePolicy::Pause).unwrap(),
+        "\"Pause\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FailurePolicy::Continue).unwrap(),
+        "\"Continue\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FailurePolicy::Rollback).unwrap(),
+        "\"Rollback\""
+    );
+}
+
+#[test]
 fn test_status_decisions_serialization() {
     let status = RolloutStatus {
         phase: Some(Phase::Progressing),

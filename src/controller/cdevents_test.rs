@@ -371,7 +371,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
     let event = &events[0];
 
     // Get the data payload
-    use cloudevents::AttributesReader;
+
     let data = event.data().expect("Event should have data");
 
     // Parse as JSON
