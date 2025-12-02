@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
     status = "RolloutStatus",
     printcolumn = r#"{"name":"Desired", "type":"integer", "jsonPath":".spec.replicas"}"#,
     printcolumn = r#"{"name":"Current", "type":"integer", "jsonPath":".status.replicas"}"#,
-    printcolumn = r#"{"name":"Ready", "type":"integer", "jsonPath":".status.ready_replicas"}"#,
+    printcolumn = r#"{"name":"Ready", "type":"integer", "jsonPath":".status.readyReplicas"}"#,
+    printcolumn = r#"{"name":"Phase", "type":"string", "jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Weight", "type":"integer", "jsonPath":".status.currentWeight"}"#,
     printcolumn = r#"{"name":"Age", "type":"date", "jsonPath":".metadata.creationTimestamp"}"#
 )]
 pub struct RolloutSpec {
