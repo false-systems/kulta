@@ -1,5 +1,5 @@
 //! CDEvents emission for rollout observability.
-//! See `docs/design/cdevents-observability.md` for specification.
+//! See the project documentation for specification.
 
 use crate::crd::rollout::{Rollout, RolloutStatus};
 use cloudevents::Event;
