@@ -1,0 +1,146 @@
+apiVersion: skaffold/v4beta11
+kind: Config
+
+metadata:
+  name: kulta
+
+# Build configuration
+build:
+  artifacts:
+    # KULTA controller (Canary rollout manager)
+    - image: kulta-controller
+      docker:
+        dockerfile: Dockerfile
+        buildArgs:
+          # Use cached layers for faster rebuilds
+          CARGO_INCREMENTAL: "1"
+      # Only rebuild when source code changes
+      sync:
+        manual:
+          - src: "src/**/*.rs"
+            dest: /app/src
+          - src: "Cargo.toml"
+            dest: /app/Cargo.toml
+
+  # Use local Docker for Kind clusters
+  local:
+    push: false
+    useBuildkit: true
+    concurrency: 1
+
+# Deployment manifests
+manifests:
+  rawYaml:
+    # KULTA CRD (Rollout resource definition)
+    - deploy/crd.yaml
+    # KULTA controller deployment
+    - deploy/controller.yaml
+    # RBAC (ServiceAccount, Role, RoleBinding)
+    - deploy/rbac.yaml
+
+# Deploy configuration
+deploy:
+  kubectl: {}
+  # Status check - wait for KULTA to be ready
+  statusCheckDeadlineSeconds: 180
+  kubeContext: kind-kulta-dev
+
+# Port forwarding for local testing
+portForward:
+  # KULTA controller logs and metrics
+  - resourceType: deployment
+    resourceName: kulta-controller
+    namespace: kulta-system
+    port: 8080
+    localPort: 8080  # Controller health endpoint
+
+  # Metrics endpoint (if Prometheus is enabled)
+  - resourceType: deployment
+    resourceName: kulta-controller
+    namespace: kulta-system
+    port: 9090
+    localPort: 9091  # Avoid conflict with RAUTA
+
+# Development profiles
+profiles:
+  # Default development profile
+  - name: dev
+    activation:
+      - command: dev
+    patches:
+      - op: add
+        path: /build/artifacts/0/docker/buildArgs/RUST_BACKTRACE
+        value: "1"
+      - op: add
+        path: /build/artifacts/0/docker/buildArgs/CARGO_PROFILE
+        value: "dev"
+    deploy:
+      logs:
+        prefix: podAndContainer
+      statusCheck: true
+
+  # Production-like testing profile
+  - name: prod
+    patches:
+      - op: add
+        path: /build/artifacts/0/docker/buildArgs/CARGO_PROFILE
+        value: "release"
+
+  # Test canary with manual promotion
+  - name: test-manual
+    manifests:
+      rawYaml:
+        - deploy/crd.yaml
+        - deploy/controller.yaml
+        - deploy/rbac.yaml
+        # Load manual promotion test example
+        - examples/manual-promotion-test.yaml
+    deploy:
+      kubectl: {}
+      statusCheckDeadlineSeconds: 120
+
+  # Test canary with time-based pause
+  - name: test-time
+    manifests:
+      rawYaml:
+        - deploy/crd.yaml
+        - deploy/controller.yaml
+        - deploy/rbac.yaml
+        # Load time-based pause test example
+        - examples/time-based-pause-test.yaml
+    deploy:
+      kubectl: {}
+      statusCheckDeadlineSeconds: 120
+
+  # Full demo with Gateway API
+  - name: demo
+    manifests:
+      rawYaml:
+        - deploy/crd.yaml
+        - deploy/controller.yaml
+        - deploy/rbac.yaml
+        - examples/manual-promotion-test.yaml
+        - examples/time-based-pause-test.yaml
+    portForward:
+      # Also forward HTTPRoute traffic
+      - resourceType: service
+        resourceName: nginx-stable
+        namespace: manual-promo-test
+        port: 80
+        localPort: 8081
+
+# Custom test phase
+test:
+  - image: kulta-controller
+    custom:
+      - command: cargo test --workspace
+      - command: cargo clippy --workspace -- -D warnings
+
+# Verify phase (optional pre-deploy checks)
+verify:
+  - name: check-gateway-api-crds
+    container:
+      name: kubectl-check
+      image: bitnami/kubectl:latest
+      command: ["kubectl"]
+      args: ["get", "crd", "gateways.gateway.networking.k8s.io"]

@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kulta-controller
+  namespace: kulta-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kulta-controller
+rules:
+# Rollout CRD permissions
+- apiGroups: ["kulta.io"]
+  resources: ["rollouts"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["kulta.io"]
+  resources: ["rollouts/status"]
+  verbs: ["get", "update", "patch"]
+# ReplicaSet permissions (for canary rollouts)
+- apiGroups: ["apps"]
+  resources: ["replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+# Deployment permissions (for primary workload)
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+# HTTPRoute permissions (for traffic splitting)
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes/status"]
+  verbs: ["get", "update", "patch"]
+# Pod permissions (for monitoring rollout)
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+# Event permissions (for status updates)
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kulta-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kulta-controller
+subjects:
+- kind: ServiceAccount
+  name: kulta-controller
+  namespace: kulta-system

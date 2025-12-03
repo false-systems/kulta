@@ -1929,27 +1929,18 @@ async fn test_build_replicasets_at_completion() {
     );
 }
 
-// TDD Cycle 1 (CDEvents Integration): Verify Context includes CDEventsSink
-// This is a compile-time structural test - if fields don't exist, it won't compile
-#[test]
-fn test_context_includes_cdevents_sink() {
-    use crate::controller::cdevents::CDEventsSink;
+// TDD Cycle 1 (CDEvents Integration): Test that Context includes CDEventsSink
+#[tokio::test]
+async fn test_context_includes_cdevents_sink() {
+    // ARRANGE & ACT: Create mock context (doesn't require kubeconfig)
+    let ctx = Context::new_mock();
 
-    // ARRANGE: Create mock CDEvents sink and prometheus client
-    let sink = CDEventsSink::new_mock();
-    let prometheus = PrometheusClient::new_mock();
+    // ASSERT: Verify Context has all required fields
+    let _client = &ctx.client;
+    let _sink = &ctx.cdevents_sink;
+    let _prometheus = &ctx.prometheus_client;
 
-    // Verify Context struct has expected fields via type checking
-    // This is a compile-time test - accessing non-existent fields won't compile
-    fn assert_context_fields(ctx: &Context) {
-        let _client: &kube::Client = &ctx.client;
-        let _sink: &std::sync::Arc<CDEventsSink> = &ctx.cdevents_sink;
-        let _prometheus: &std::sync::Arc<PrometheusClient> = &ctx.prometheus_client;
-    }
-
-    // The function signature above proves Context has all required fields
-    // We can't call it without a real client, but compilation proves the types exist
-    let _ = (sink, prometheus, assert_context_fields);
+    // Test passes if compilation succeeds (fields exist)
 }
 
 #[tokio::test]
