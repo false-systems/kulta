@@ -166,37 +166,62 @@ pub struct MetricConfig {
 }
 
 /// Phase of a Rollout
+///
+/// Represents the current lifecycle stage of the rollout
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]
 pub enum Phase {
+    /// Initial phase when rollout is being set up
     #[default]
     Initializing,
+    /// Rollout is actively progressing through canary steps
     Progressing,
+    /// Rollout is paused waiting for manual promotion or duration
     Paused,
+    /// Rollout successfully completed (100% canary)
     Completed,
+    /// Rollout failed and requires manual intervention
     Failed,
 }
 
 /// Action taken by the controller
+///
+/// Represents what the controller decided to do at a given point
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub enum DecisionAction {
+    /// Initial setup of the rollout
     Initialize,
+    /// Advance to the next canary step
     StepAdvance,
+    /// Manual promotion triggered
     Promotion,
+    /// Rollback to stable version
     Rollback,
+    /// Pause the rollout
     Pause,
+    /// Resume from paused state
     Resume,
+    /// Rollout completed successfully
     Complete,
 }
 
 /// Reason for the decision
+///
+/// Explains why a particular action was taken
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub enum DecisionReason {
+    /// Metrics analysis passed thresholds
     AnalysisPassed,
+    /// Metrics analysis failed thresholds
     AnalysisFailed,
+    /// Configured pause duration has elapsed
     PauseDurationExpired,
+    /// User triggered manual promotion
     ManualPromotion,
+    /// User triggered manual rollback
     ManualRollback,
+    /// Operation timed out
     Timeout,
+    /// Initial rollout setup
     Initialization,
 }
 
