@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
     status = "RolloutStatus",
     printcolumn = r#"{"name":"Desired", "type":"integer", "jsonPath":".spec.replicas"}"#,
     printcolumn = r#"{"name":"Current", "type":"integer", "jsonPath":".status.replicas"}"#,
-    printcolumn = r#"{"name":"Ready", "type":"integer", "jsonPath":".status.ready_replicas"}"#,
+    printcolumn = r#"{"name":"Ready", "type":"integer", "jsonPath":".status.readyReplicas"}"#,
+    printcolumn = r#"{"name":"Phase", "type":"string", "jsonPath":".status.phase"}"#,
+    printcolumn = r#"{"name":"Weight", "type":"integer", "jsonPath":".status.currentWeight"}"#,
     printcolumn = r#"{"name":"Age", "type":"date", "jsonPath":".metadata.creationTimestamp"}"#
 )]
 pub struct RolloutSpec {
@@ -101,12 +103,28 @@ pub struct GatewayAPIRouting {
     pub http_route: String,
 }
 
+/// What to do when Prometheus is unreachable during analysis
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]
+pub enum FailurePolicy {
+    /// Pause rollout until Prometheus recovers (default, safest)
+    #[default]
+    Pause,
+    /// Proceed without metrics (risky)
+    Continue,
+    /// Treat as failure, rollback immediately
+    Rollback,
+}
+
 /// Analysis configuration for automated rollback based on metrics
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct AnalysisConfig {
     /// Prometheus configuration
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prometheus: Option<PrometheusConfig>,
+
+    /// What to do when Prometheus is unreachable
+    #[serde(rename = "failurePolicy", skip_serializing_if = "Option::is_none")]
+    pub failure_policy: Option<FailurePolicy>,
 
     /// Warmup duration before starting metrics analysis (e.g., "1m", "30s")
     #[serde(rename = "warmupDuration", skip_serializing_if = "Option::is_none")]
@@ -165,6 +183,72 @@ pub enum Phase {
     Failed,
 }
 
+/// Action taken by the controller
+///
+/// Represents what the controller decided to do at a given point
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub enum DecisionAction {
+    /// Initial setup of the rollout
+    Initialize,
+    /// Advance to the next canary step
+    StepAdvance,
+    /// Manual promotion triggered
+    Promotion,
+    /// Rollback to stable version
+    Rollback,
+    /// Pause the rollout
+    Pause,
+    /// Resume from paused state
+    Resume,
+    /// Rollout completed successfully
+    Complete,
+}
+
+/// Reason for the decision
+///
+/// Explains why a particular action was taken
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub enum DecisionReason {
+    /// Metrics analysis passed thresholds
+    AnalysisPassed,
+    /// Metrics analysis failed thresholds
+    AnalysisFailed,
+    /// Configured pause duration has elapsed
+    PauseDurationExpired,
+    /// User triggered manual promotion
+    ManualPromotion,
+    /// User triggered manual rollback
+    ManualRollback,
+    /// Operation timed out
+    Timeout,
+    /// Initial rollout setup
+    Initialization,
+}
+
+/// Metric snapshot at decision time
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct MetricSnapshot {
+    pub value: f64,
+    pub threshold: f64,
+    pub passed: bool,
+}
+
+/// Decision record for observability
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct Decision {
+    pub timestamp: String,
+    pub action: DecisionAction,
+    #[serde(rename = "fromStep", skip_serializing_if = "Option::is_none")]
+    pub from_step: Option<i32>,
+    #[serde(rename = "toStep", skip_serializing_if = "Option::is_none")]
+    pub to_step: Option<i32>,
+    pub reason: DecisionReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<std::collections::HashMap<String, MetricSnapshot>>,
+}
+
 /// Status of the Rollout
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, JsonSchema)]
 pub struct RolloutStatus {
@@ -199,6 +283,10 @@ pub struct RolloutStatus {
     /// Timestamp when current pause started (RFC3339 format)
     #[serde(rename = "pauseStartTime", skip_serializing_if = "Option::is_none")]
     pub pause_start_time: Option<String>,
+
+    /// Decision history for observability
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<Decision>,
 }
 
 #[cfg(test)]

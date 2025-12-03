@@ -75,3 +75,62 @@ fn test_rollout_crd_schema_generation() {
     assert!(version.storage);
     assert!(version.schema.is_some());
 }
+
+#[test]
+fn test_analysis_failure_policy() {
+    let yaml = r#"
+prometheus:
+  address: http://prometheus:9090
+failurePolicy: Pause
+warmupDuration: 60s
+metrics:
+  - name: error-rate
+    threshold: 0.01
+"#;
+
+    let config: AnalysisConfig = serde_yaml::from_str(yaml).expect("deserialize");
+    assert_eq!(config.failure_policy, Some(FailurePolicy::Pause));
+
+    // Test all variants serialize correctly
+    assert_eq!(
+        serde_json::to_string(&FailurePolicy::Pause).unwrap(),
+        "\"Pause\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FailurePolicy::Continue).unwrap(),
+        "\"Continue\""
+    );
+    assert_eq!(
+        serde_json::to_string(&FailurePolicy::Rollback).unwrap(),
+        "\"Rollback\""
+    );
+}
+
+#[test]
+fn test_status_decisions_serialization() {
+    let status = RolloutStatus {
+        phase: Some(Phase::Progressing),
+        current_step_index: Some(1),
+        current_weight: Some(50),
+        decisions: vec![Decision {
+            timestamp: "2024-12-01T10:00:00Z".to_string(),
+            action: DecisionAction::StepAdvance,
+            from_step: Some(0),
+            to_step: Some(1),
+            reason: DecisionReason::AnalysisPassed,
+            message: None,
+            metrics: None,
+        }],
+        ..Default::default()
+    };
+
+    let json = serde_json::to_string(&status).expect("serialize");
+    assert!(json.contains("decisions"));
+    assert!(json.contains("StepAdvance"));
+    assert!(json.contains("AnalysisPassed"));
+
+    // Roundtrip
+    let parsed: RolloutStatus = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(parsed.decisions.len(), 1);
+    assert_eq!(parsed.decisions[0].action, DecisionAction::StepAdvance);
+}
