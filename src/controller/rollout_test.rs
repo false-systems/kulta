@@ -42,6 +42,7 @@ fn create_test_rollout_with_canary() -> Rollout {
                 }),
             },
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -93,6 +94,7 @@ async fn test_reconcile_creates_stable_replicaset() {
                 }),
             },
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -211,6 +213,7 @@ async fn test_build_replicaset_spec() {
                 }),
             },
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -289,6 +292,7 @@ async fn test_reconcile_creates_canary_replicaset() {
                 }),
             },
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -379,6 +383,7 @@ async fn test_replicaset_has_kulta_managed_label() {
                 }),
             },
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -492,6 +497,7 @@ async fn test_build_both_stable_and_canary_replicasets() {
                 }),
             },
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -606,6 +612,7 @@ async fn test_calculate_traffic_weights_step0() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -655,6 +662,7 @@ async fn test_calculate_traffic_weights_step1() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -700,6 +708,7 @@ async fn test_calculate_traffic_weights_no_step() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -736,6 +745,7 @@ async fn test_calculate_traffic_weights_complete() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -781,6 +791,7 @@ async fn test_calculate_traffic_weights_beyond_steps() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -820,6 +831,7 @@ async fn test_build_httproute_backend_weights() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -873,6 +885,7 @@ async fn test_convert_to_gateway_api_backend_refs() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -935,7 +948,10 @@ async fn test_gateway_api_backend_refs_no_canary_strategy() {
             replicas: 3,
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
-            strategy: RolloutStrategy { canary: None }, // No canary strategy
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: None,
+            }, // No canary strategy
         },
         status: None,
     };
@@ -962,6 +978,7 @@ async fn test_initialize_rollout_status() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1014,6 +1031,7 @@ async fn test_should_progress_to_next_step() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1062,6 +1080,7 @@ async fn test_should_not_progress_when_paused() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1108,6 +1127,7 @@ async fn test_advance_to_next_step() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1164,6 +1184,7 @@ async fn test_advance_to_final_step() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1221,6 +1242,7 @@ async fn test_compute_desired_status_for_new_rollout() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1266,6 +1288,7 @@ async fn test_compute_desired_status_progresses_step() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1314,6 +1337,7 @@ async fn test_compute_desired_status_respects_pause() {
             selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),

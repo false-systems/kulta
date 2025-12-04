@@ -19,6 +19,7 @@ async fn test_emit_service_deployed_on_initialization() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:1.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -87,6 +88,7 @@ async fn test_emit_service_upgraded_on_step_progression() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -166,6 +168,7 @@ async fn test_emit_service_rolledback_on_failure() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -239,6 +242,7 @@ async fn test_emit_service_published_on_completion() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -320,6 +324,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),

@@ -4,6 +4,55 @@
 use super::*;
 use kube::CustomResourceExt;
 
+// TDD Cycle 1 (Simple Strategy): RED - Test that strategy.simple can be deserialized
+#[test]
+fn test_simple_strategy_deserialize_from_yaml() {
+    let yaml = r#"
+apiVersion: kulta.io/v1alpha1
+kind: Rollout
+metadata:
+  name: simple-rollout
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:1.20
+  strategy:
+    simple:
+      analysis:
+        prometheus:
+          address: http://prometheus:9090
+        metrics:
+          - name: error-rate
+            threshold: 0.01
+"#;
+
+    let rollout: Rollout = serde_yaml::from_str(yaml).expect("Failed to deserialize Rollout");
+
+    assert_eq!(rollout.metadata.name.as_deref(), Some("simple-rollout"));
+    assert_eq!(rollout.spec.replicas, 3);
+
+    // Verify simple strategy is set
+    assert!(rollout.spec.strategy.simple.is_some());
+    assert!(rollout.spec.strategy.canary.is_none());
+
+    let simple = rollout.spec.strategy.simple.unwrap();
+    assert!(simple.analysis.is_some());
+    let analysis = simple.analysis.unwrap();
+    assert_eq!(
+        analysis.prometheus.unwrap().address.as_deref(),
+        Some("http://prometheus:9090")
+    );
+}
+
 #[test]
 fn test_rollout_deserialize_from_yaml() {
     let yaml = r#"
