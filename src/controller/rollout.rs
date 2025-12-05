@@ -734,8 +734,11 @@ pub fn build_replicaset(
 ///
 /// Creates a single ReplicaSet (no stable/canary split) with:
 /// - Name: {rollout-name} (no suffix)
-/// - Labels: pod-template-hash, kulta.io/managed-by
+/// - Labels: pod-template-hash, rollouts.kulta.io/type, rollouts.kulta.io/managed
 /// - Spec: from Rollout's template
+///
+/// The `rollouts.kulta.io/managed=true` label prevents Kubernetes Deployment
+/// controllers from adopting KULTA-managed ReplicaSets.
 ///
 /// # Errors
 /// Returns error if Rollout is missing name or if PodTemplateSpec cannot be serialized
@@ -762,12 +765,13 @@ pub fn build_replicaset_for_simple(
         .unwrap_or_default();
 
     labels.insert("pod-template-hash".to_string(), pod_template_hash.clone());
-    labels.insert("rollouts.kulta.io/managed".to_string(), "true".to_string());
     labels.insert("rollouts.kulta.io/type".to_string(), "simple".to_string());
+    labels.insert("rollouts.kulta.io/managed".to_string(), "true".to_string());
 
-    // Update template metadata
-    let mut template_metadata = template.metadata.unwrap_or_default();
+    // Update template metadata in place
+    let mut template_metadata = template.metadata.take().unwrap_or_default();
     template_metadata.labels = Some(labels.clone());
+    template.metadata = Some(template_metadata);
 
     // Build selector (must match pod labels)
     let selector = LabelSelector {

@@ -66,13 +66,17 @@ fn test_simple_strategy_creates_single_replicaset() {
     );
     assert_eq!(rs.spec.as_ref().unwrap().replicas, Some(3));
 
-    // Verify labels
+    // Verify labels (consistent with canary strategy labeling)
     let labels = rs.metadata.labels.as_ref().unwrap();
     assert_eq!(labels.get("app"), Some(&"simple-app".to_string()));
     assert!(labels.contains_key("pod-template-hash"));
     assert_eq!(
-        labels.get("kulta.io/managed-by"),
-        Some(&"kulta".to_string())
+        labels.get("rollouts.kulta.io/type"),
+        Some(&"simple".to_string())
+    );
+    assert_eq!(
+        labels.get("rollouts.kulta.io/managed"),
+        Some(&"true".to_string())
     );
 }
 
