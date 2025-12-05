@@ -762,12 +762,12 @@ pub fn build_replicaset_for_simple(
         .unwrap_or_default();
 
     labels.insert("pod-template-hash".to_string(), pod_template_hash.clone());
-    labels.insert("kulta.io/managed-by".to_string(), "kulta".to_string());
+    labels.insert("rollouts.kulta.io/managed".to_string(), "true".to_string());
+    labels.insert("rollouts.kulta.io/type".to_string(), "simple".to_string());
 
     // Update template metadata
     let mut template_metadata = template.metadata.unwrap_or_default();
     template_metadata.labels = Some(labels.clone());
-    template.metadata = Some(template_metadata);
 
     // Build selector (must match pod labels)
     let selector = LabelSelector {
