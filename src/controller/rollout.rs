@@ -903,44 +903,58 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
 
-    // Calculate replica split based on current canary weight
-    let current_weight = rollout
-        .status
-        .as_ref()
-        .and_then(|s| s.current_weight)
-        .unwrap_or(0);
+    // Handle strategy-specific ReplicaSet management
+    if rollout.spec.strategy.simple.is_some() {
+        // Simple strategy: single ReplicaSet with all replicas
+        let rs = build_replicaset_for_simple(&rollout, rollout.spec.replicas)?;
+        info!(
+            rollout = ?name,
+            strategy = "simple",
+            replicas = rollout.spec.replicas,
+            "Built simple ReplicaSet"
+        );
+        ensure_replicaset_exists(&rs_api, &rs, "simple", rollout.spec.replicas).await?;
+    } else {
+        // Canary strategy: stable + canary ReplicaSets with traffic-based scaling
+        let current_weight = rollout
+            .status
+            .as_ref()
+            .and_then(|s| s.current_weight)
+            .unwrap_or(0);
 
-    let (stable_replicas, canary_replicas) =
-        calculate_replica_split(rollout.spec.replicas, current_weight);
+        let (stable_replicas, canary_replicas) =
+            calculate_replica_split(rollout.spec.replicas, current_weight);
 
-    info!(
-        rollout = ?name,
-        total_replicas = rollout.spec.replicas,
-        current_weight = current_weight,
-        stable_replicas = stable_replicas,
-        canary_replicas = canary_replicas,
-        "Calculated ReplicaSet scaling"
-    );
+        info!(
+            rollout = ?name,
+            strategy = "canary",
+            total_replicas = rollout.spec.replicas,
+            current_weight = current_weight,
+            stable_replicas = stable_replicas,
+            canary_replicas = canary_replicas,
+            "Calculated ReplicaSet scaling"
+        );
 
-    // Build and ensure stable ReplicaSet exists with calculated replicas
-    let stable_rs = build_replicaset(&rollout, "stable", stable_replicas)?;
-    info!(
-        rollout = ?name,
-        rs_type = "stable",
-        spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
-        "Built stable ReplicaSet"
-    );
-    ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas).await?;
+        // Build and ensure stable ReplicaSet exists with calculated replicas
+        let stable_rs = build_replicaset(&rollout, "stable", stable_replicas)?;
+        info!(
+            rollout = ?name,
+            rs_type = "stable",
+            spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
+            "Built stable ReplicaSet"
+        );
+        ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas).await?;
 
-    // Build and ensure canary ReplicaSet exists with calculated replicas
-    let canary_rs = build_replicaset(&rollout, "canary", canary_replicas)?;
-    info!(
-        rollout = ?name,
-        rs_type = "canary",
-        spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
-        "Built canary ReplicaSet"
-    );
-    ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas).await?;
+        // Build and ensure canary ReplicaSet exists with calculated replicas
+        let canary_rs = build_replicaset(&rollout, "canary", canary_replicas)?;
+        info!(
+            rollout = ?name,
+            rs_type = "canary",
+            spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
+            "Built canary ReplicaSet"
+        );
+        ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas).await?;
+    }
 
     // Update HTTPRoute with weighted backends (if configured)
     if let Some(canary_strategy) = &rollout.spec.strategy.canary {
