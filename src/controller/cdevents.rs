@@ -108,9 +108,13 @@ pub async fn emit_status_change_event(
 ) -> Result<(), CDEventsError> {
     use crate::crd::rollout::Phase;
 
-    // Detect transition: None → Progressing = service.deployed
-    let is_initialization =
-        old_status.is_none() && matches!(new_status.phase, Some(Phase::Progressing));
+    // Detect transition: None → Progressing/Completed = service.deployed
+    // (Simple strategy goes directly to Completed, Canary goes to Progressing)
+    let is_initialization = old_status.is_none()
+        && matches!(
+            new_status.phase,
+            Some(Phase::Progressing) | Some(Phase::Completed)
+        );
 
     // Detect step progression: Progressing → Progressing (different step)
     let is_step_progression = match (old_status, &new_status.phase) {
@@ -136,6 +140,15 @@ pub async fn emit_status_change_event(
         sink.emit_event(event);
         #[cfg(not(test))]
         sink.send_event(&event).await?;
+
+        // For simple strategy (direct to Completed), also emit service.published
+        if is_completion {
+            let event = build_service_published_event(rollout, new_status)?;
+            #[cfg(test)]
+            sink.emit_event(event);
+            #[cfg(not(test))]
+            sink.send_event(&event).await?;
+        }
 
         Ok(())
     } else if is_step_progression {

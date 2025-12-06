@@ -399,10 +399,14 @@ pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
 
 /// Initialize RolloutStatus for a new Rollout
 ///
-/// Sets up initial status with:
+/// For canary strategy:
 /// - current_step_index = 0 (first step)
 /// - phase = "Progressing"
 /// - current_weight from first step's setWeight
+///
+/// For simple strategy:
+/// - phase = "Completed" (no steps to progress through)
+/// - No step index or weight (not applicable)
 ///
 /// # Arguments
 /// * `rollout` - The Rollout to initialize status for
@@ -412,11 +416,23 @@ pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
 pub fn initialize_rollout_status(rollout: &Rollout) -> crate::crd::rollout::RolloutStatus {
     use crate::crd::rollout::RolloutStatus;
 
+    // Check for simple strategy first
+    if rollout.spec.strategy.simple.is_some() {
+        // Simple strategy: no steps, just deploy and complete
+        return RolloutStatus {
+            phase: Some(Phase::Completed),
+            current_step_index: None,
+            current_weight: None,
+            message: Some("Simple rollout completed: all replicas updated".to_string()),
+            ..Default::default()
+        };
+    }
+
     // Get canary strategy
     let canary_strategy = match &rollout.spec.strategy.canary {
         Some(strategy) => strategy,
         None => {
-            // No canary strategy - return default status
+            // No strategy defined - return default status
             return RolloutStatus::default();
         }
     };
@@ -714,6 +730,73 @@ pub fn build_replicaset(
     })
 }
 
+/// Build a ReplicaSet for a simple strategy Rollout
+///
+/// Creates a single ReplicaSet (no stable/canary split) with:
+/// - Name: {rollout-name} (no suffix)
+/// - Labels: pod-template-hash, rollouts.kulta.io/type, rollouts.kulta.io/managed
+/// - Spec: from Rollout's template
+///
+/// The `rollouts.kulta.io/managed=true` label prevents Kubernetes Deployment
+/// controllers from adopting KULTA-managed ReplicaSets.
+///
+/// # Errors
+/// Returns error if Rollout is missing name or if PodTemplateSpec cannot be serialized
+pub fn build_replicaset_for_simple(
+    rollout: &Rollout,
+    replicas: i32,
+) -> Result<ReplicaSet, ReconcileError> {
+    let rollout_name = rollout
+        .metadata
+        .name
+        .as_ref()
+        .ok_or(ReconcileError::MissingName)?;
+    let namespace = rollout.metadata.namespace.clone();
+
+    // Compute pod template hash
+    let pod_template_hash = compute_pod_template_hash(&rollout.spec.template)?;
+
+    // Clone the pod template and add labels
+    let mut template = rollout.spec.template.clone();
+    let mut labels = template
+        .metadata
+        .as_ref()
+        .and_then(|m| m.labels.clone())
+        .unwrap_or_default();
+
+    labels.insert("pod-template-hash".to_string(), pod_template_hash.clone());
+    labels.insert("rollouts.kulta.io/type".to_string(), "simple".to_string());
+    labels.insert("rollouts.kulta.io/managed".to_string(), "true".to_string());
+
+    // Update template metadata in place
+    let mut template_metadata = template.metadata.take().unwrap_or_default();
+    template_metadata.labels = Some(labels.clone());
+    template.metadata = Some(template_metadata);
+
+    // Build selector (must match pod labels)
+    let selector = LabelSelector {
+        match_labels: Some(labels.clone()),
+        ..Default::default()
+    };
+
+    // Build ReplicaSet - no suffix for simple strategy
+    Ok(ReplicaSet {
+        metadata: ObjectMeta {
+            name: Some(rollout_name.clone()),
+            namespace,
+            labels: Some(labels),
+            ..Default::default()
+        },
+        spec: Some(ReplicaSetSpec {
+            replicas: Some(replicas),
+            selector,
+            template: Some(template),
+            ..Default::default()
+        }),
+        status: None,
+    })
+}
+
 /// Validate Rollout specification
 ///
 /// Validates runtime constraints that cannot be enforced via CRD schema.
@@ -824,44 +907,58 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     // Create ReplicaSet API client
     let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
 
-    // Calculate replica split based on current canary weight
-    let current_weight = rollout
-        .status
-        .as_ref()
-        .and_then(|s| s.current_weight)
-        .unwrap_or(0);
+    // Handle strategy-specific ReplicaSet management
+    if rollout.spec.strategy.simple.is_some() {
+        // Simple strategy: single ReplicaSet with all replicas
+        let rs = build_replicaset_for_simple(&rollout, rollout.spec.replicas)?;
+        info!(
+            rollout = ?name,
+            strategy = "simple",
+            replicas = rollout.spec.replicas,
+            "Built simple ReplicaSet"
+        );
+        ensure_replicaset_exists(&rs_api, &rs, "simple", rollout.spec.replicas).await?;
+    } else {
+        // Canary strategy: stable + canary ReplicaSets with traffic-based scaling
+        let current_weight = rollout
+            .status
+            .as_ref()
+            .and_then(|s| s.current_weight)
+            .unwrap_or(0);
 
-    let (stable_replicas, canary_replicas) =
-        calculate_replica_split(rollout.spec.replicas, current_weight);
+        let (stable_replicas, canary_replicas) =
+            calculate_replica_split(rollout.spec.replicas, current_weight);
 
-    info!(
-        rollout = ?name,
-        total_replicas = rollout.spec.replicas,
-        current_weight = current_weight,
-        stable_replicas = stable_replicas,
-        canary_replicas = canary_replicas,
-        "Calculated ReplicaSet scaling"
-    );
+        info!(
+            rollout = ?name,
+            strategy = "canary",
+            total_replicas = rollout.spec.replicas,
+            current_weight = current_weight,
+            stable_replicas = stable_replicas,
+            canary_replicas = canary_replicas,
+            "Calculated ReplicaSet scaling"
+        );
 
-    // Build and ensure stable ReplicaSet exists with calculated replicas
-    let stable_rs = build_replicaset(&rollout, "stable", stable_replicas)?;
-    info!(
-        rollout = ?name,
-        rs_type = "stable",
-        spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
-        "Built stable ReplicaSet"
-    );
-    ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas).await?;
+        // Build and ensure stable ReplicaSet exists with calculated replicas
+        let stable_rs = build_replicaset(&rollout, "stable", stable_replicas)?;
+        info!(
+            rollout = ?name,
+            rs_type = "stable",
+            spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
+            "Built stable ReplicaSet"
+        );
+        ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas).await?;
 
-    // Build and ensure canary ReplicaSet exists with calculated replicas
-    let canary_rs = build_replicaset(&rollout, "canary", canary_replicas)?;
-    info!(
-        rollout = ?name,
-        rs_type = "canary",
-        spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
-        "Built canary ReplicaSet"
-    );
-    ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas).await?;
+        // Build and ensure canary ReplicaSet exists with calculated replicas
+        let canary_rs = build_replicaset(&rollout, "canary", canary_replicas)?;
+        info!(
+            rollout = ?name,
+            rs_type = "canary",
+            spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
+            "Built canary ReplicaSet"
+        );
+        ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas).await?;
+    }
 
     // Update HTTPRoute with weighted backends (if configured)
     if let Some(canary_strategy) = &rollout.spec.strategy.canary {

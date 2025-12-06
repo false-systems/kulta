@@ -19,6 +19,7 @@ async fn test_emit_service_deployed_on_initialization() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:1.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -87,6 +88,7 @@ async fn test_emit_service_upgraded_on_step_progression() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -166,6 +168,7 @@ async fn test_emit_service_rolledback_on_failure() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -239,6 +242,7 @@ async fn test_emit_service_published_on_completion() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -320,6 +324,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
+                simple: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -387,6 +392,67 @@ async fn test_cdevent_contains_kulta_custom_data() {
     assert_eq!(kulta["step"]["index"], 1);
     assert_eq!(kulta["step"]["traffic_weight"], 50);
     assert!(kulta["rollout"]["name"].as_str().is_some());
+}
+
+// TDD: Test that simple strategy emits both deployed and published events
+#[tokio::test]
+async fn test_simple_strategy_emits_deployed_and_published() {
+    use crate::crd::rollout::SimpleStrategy;
+    use cloudevents::AttributesReader;
+
+    // ARRANGE: Create rollout with simple strategy
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("simple-app".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: Default::default(),
+            template: create_test_pod_template("nginx:2.0"),
+            strategy: RolloutStrategy {
+                simple: Some(SimpleStrategy { analysis: None }),
+                canary: None,
+            },
+        },
+        status: None,
+    };
+
+    // Create mock CDEvents sink
+    let sink = CDEventsSink::new_mock();
+
+    // New status for simple strategy (directly Completed)
+    let new_status = RolloutStatus {
+        phase: Some(Phase::Completed),
+        current_step_index: None,
+        current_weight: None,
+        message: Some("Simple rollout completed".to_string()),
+        ..Default::default()
+    };
+
+    // ACT: Emit status change event (None → Completed)
+    emit_status_change_event(&rollout, &None, &new_status, &sink)
+        .await
+        .expect("Event emission should succeed");
+
+    // ASSERT: Both deployed and published events should be emitted
+    let events = sink.get_emitted_events();
+    assert_eq!(events.len(), 2, "Simple strategy should emit 2 events");
+
+    // First event: service.deployed
+    assert_eq!(
+        events[0].ty(),
+        "dev.cdevents.service.deployed.0.2.0",
+        "First event should be service.deployed"
+    );
+
+    // Second event: service.published
+    assert_eq!(
+        events[1].ty(),
+        "dev.cdevents.service.published.0.2.0",
+        "Second event should be service.published"
+    );
 }
 
 // Helper to create test pod template

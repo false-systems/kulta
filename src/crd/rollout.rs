@@ -40,11 +40,26 @@ fn default_replicas() -> i32 {
     1
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
 pub struct RolloutStrategy {
+    /// Simple deployment strategy (rolling update with observability)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub simple: Option<SimpleStrategy>,
+
     /// Canary deployment strategy
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canary: Option<CanaryStrategy>,
+}
+
+/// Simple deployment strategy
+///
+/// Standard Kubernetes rolling update with CDEvents observability.
+/// No traffic splitting - just deploy, monitor metrics, and emit events.
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct SimpleStrategy {
+    /// Analysis configuration for automated metrics-based rollback
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
