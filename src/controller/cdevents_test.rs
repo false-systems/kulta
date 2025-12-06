@@ -20,6 +20,7 @@ async fn test_emit_service_deployed_on_initialization() {
             template: create_test_pod_template("nginx:1.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -89,6 +90,7 @@ async fn test_emit_service_upgraded_on_step_progression() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -169,6 +171,7 @@ async fn test_emit_service_rolledback_on_failure() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -243,6 +246,7 @@ async fn test_emit_service_published_on_completion() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -325,6 +329,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -414,6 +419,7 @@ async fn test_simple_strategy_emits_deployed_and_published() {
             strategy: RolloutStrategy {
                 simple: Some(SimpleStrategy { analysis: None }),
                 canary: None,
+                blue_green: None,
             },
         },
         status: None,

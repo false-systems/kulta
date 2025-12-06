@@ -44,6 +44,7 @@ fn create_test_rollout_with_simple() -> Rollout {
             strategy: RolloutStrategy {
                 simple: Some(SimpleStrategy { analysis: None }),
                 canary: None,
+                blue_green: None,
             },
         },
         status: None,
@@ -134,6 +135,7 @@ fn create_test_rollout_with_canary() -> Rollout {
             },
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -186,6 +188,7 @@ async fn test_reconcile_creates_stable_replicaset() {
             },
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -305,6 +308,7 @@ async fn test_build_replicaset_spec() {
             },
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -384,6 +388,7 @@ async fn test_reconcile_creates_canary_replicaset() {
             },
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -475,6 +480,7 @@ async fn test_replicaset_has_kulta_managed_label() {
             },
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -589,6 +595,7 @@ async fn test_build_both_stable_and_canary_replicasets() {
             },
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -704,6 +711,7 @@ async fn test_calculate_traffic_weights_step0() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -754,6 +762,7 @@ async fn test_calculate_traffic_weights_step1() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -800,6 +809,7 @@ async fn test_calculate_traffic_weights_no_step() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -837,6 +847,7 @@ async fn test_calculate_traffic_weights_complete() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -883,6 +894,7 @@ async fn test_calculate_traffic_weights_beyond_steps() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -923,6 +935,7 @@ async fn test_build_httproute_backend_weights() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -977,6 +990,7 @@ async fn test_convert_to_gateway_api_backend_refs() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1041,6 +1055,7 @@ async fn test_gateway_api_backend_refs_no_canary_strategy() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: None,
             }, // No canary strategy
         },
@@ -1070,6 +1085,7 @@ async fn test_initialize_rollout_status() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1123,6 +1139,7 @@ async fn test_should_progress_to_next_step() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1172,6 +1189,7 @@ async fn test_should_not_progress_when_paused() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1219,6 +1237,7 @@ async fn test_advance_to_next_step() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1276,6 +1295,7 @@ async fn test_advance_to_final_step() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1334,6 +1354,7 @@ async fn test_compute_desired_status_for_new_rollout() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1380,6 +1401,7 @@ async fn test_compute_desired_status_progresses_step() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -1429,6 +1451,7 @@ async fn test_compute_desired_status_respects_pause() {
             template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),

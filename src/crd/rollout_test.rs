@@ -4,7 +4,60 @@
 use super::*;
 use kube::CustomResourceExt;
 
-// TDD Cycle 1 (Simple Strategy): RED - Test that strategy.simple can be deserialized
+// TDD Cycle 1 (Blue-Green Strategy): RED - Test that strategy.blueGreen can be deserialized
+#[test]
+fn test_blue_green_strategy_deserialize_from_yaml() {
+    let yaml = r#"
+apiVersion: kulta.io/v1alpha1
+kind: Rollout
+metadata:
+  name: blue-green-rollout
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: test-app
+  template:
+    metadata:
+      labels:
+        app: test-app
+    spec:
+      containers:
+      - name: app
+        image: nginx:2.0
+  strategy:
+    blueGreen:
+      activeService: my-app-active
+      previewService: my-app-preview
+      autoPromotionEnabled: true
+      autoPromotionSeconds: 30
+      trafficRouting:
+        gatewayAPI:
+          httpRoute: my-app-route
+"#;
+
+    let rollout: Rollout = serde_yaml::from_str(yaml).expect("Failed to deserialize Rollout");
+
+    assert_eq!(rollout.metadata.name.as_deref(), Some("blue-green-rollout"));
+    assert_eq!(rollout.spec.replicas, 3);
+
+    // Verify blue-green strategy is set
+    assert!(rollout.spec.strategy.blue_green.is_some());
+    assert!(rollout.spec.strategy.canary.is_none());
+    assert!(rollout.spec.strategy.simple.is_none());
+
+    let bg = rollout.spec.strategy.blue_green.unwrap();
+    assert_eq!(bg.active_service, "my-app-active");
+    assert_eq!(bg.preview_service, "my-app-preview");
+    assert_eq!(bg.auto_promotion_enabled, Some(true));
+    assert_eq!(bg.auto_promotion_seconds, Some(30));
+
+    // Verify traffic routing
+    let traffic = bg.traffic_routing.unwrap();
+    assert_eq!(traffic.gateway_api.unwrap().http_route, "my-app-route");
+}
+
+// TDD Cycle 1 (Simple Strategy): Test that strategy.simple can be deserialized
 #[test]
 fn test_simple_strategy_deserialize_from_yaml() {
     let yaml = r#"
