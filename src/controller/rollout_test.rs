@@ -141,6 +141,22 @@ fn test_blue_green_creates_active_and_preview_replicasets() {
     );
 }
 
+// TDD Cycle 3 (Blue-Green Strategy): RED - Test status for blue-green strategy
+#[test]
+fn test_compute_desired_status_for_blue_green_strategy() {
+    // ARRANGE: Create rollout with blue-green strategy (no status yet)
+    let rollout = create_test_rollout_with_blue_green();
+
+    // ACT: Compute desired status
+    let status = compute_desired_status(&rollout);
+
+    // ASSERT: Blue-green starts in Preview phase (preview RS ready, awaiting promotion)
+    assert_eq!(status.phase, Some(Phase::Preview));
+    assert_eq!(status.current_step_index, None); // No steps in blue-green
+    assert_eq!(status.current_weight, None); // No gradual weight in blue-green
+    assert!(status.message.is_some());
+}
+
 // TDD Cycle 2 (Simple Strategy): Test that simple strategy creates single ReplicaSet
 #[test]
 fn test_simple_strategy_creates_single_replicaset() {

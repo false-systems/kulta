@@ -234,7 +234,9 @@ pub enum Phase {
     Progressing,
     /// Rollout is paused waiting for manual promotion or duration
     Paused,
-    /// Rollout successfully completed (100% canary)
+    /// Blue-green: Preview environment ready, awaiting promotion
+    Preview,
+    /// Rollout successfully completed (100% canary or promoted blue-green)
     Completed,
     /// Rollout failed and requires manual intervention
     Failed,

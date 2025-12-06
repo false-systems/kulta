@@ -428,6 +428,18 @@ pub fn initialize_rollout_status(rollout: &Rollout) -> crate::crd::rollout::Roll
         };
     }
 
+    // Check for blue-green strategy
+    if rollout.spec.strategy.blue_green.is_some() {
+        // Blue-green strategy: preview RS ready, awaiting promotion
+        return RolloutStatus {
+            phase: Some(Phase::Preview),
+            current_step_index: None,
+            current_weight: None,
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        };
+    }
+
     // Get canary strategy
     let canary_strategy = match &rollout.spec.strategy.canary {
         Some(strategy) => strategy,
