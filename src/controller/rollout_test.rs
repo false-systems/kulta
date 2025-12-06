@@ -51,6 +51,96 @@ fn create_test_rollout_with_simple() -> Rollout {
     }
 }
 
+// Helper function to create a test Rollout with blue-green strategy
+fn create_test_rollout_with_blue_green() -> Rollout {
+    use crate::crd::rollout::BlueGreenStrategy;
+
+    Rollout {
+        metadata: ObjectMeta {
+            name: Some("blue-green-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                match_labels: Some(
+                    vec![("app".to_string(), "blue-green-app".to_string())]
+                        .into_iter()
+                        .collect(),
+                ),
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                metadata: Some(ObjectMeta {
+                    labels: Some(
+                        vec![("app".to_string(), "blue-green-app".to_string())]
+                            .into_iter()
+                            .collect(),
+                    ),
+                    ..Default::default()
+                }),
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:2.0".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+            },
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: None,
+                blue_green: Some(BlueGreenStrategy {
+                    active_service: "my-app-active".to_string(),
+                    preview_service: "my-app-preview".to_string(),
+                    auto_promotion_enabled: Some(false),
+                    auto_promotion_seconds: None,
+                    traffic_routing: None,
+                    analysis: None,
+                }),
+            },
+        },
+        status: None,
+    }
+}
+
+// TDD Cycle 2 (Blue-Green Strategy): RED - Test that blue-green creates active and preview ReplicaSets
+#[test]
+fn test_blue_green_creates_active_and_preview_replicasets() {
+    // ARRANGE: Create rollout with blue-green strategy
+    let rollout = create_test_rollout_with_blue_green();
+
+    // ACT: Build active and preview ReplicaSets
+    let (active_rs, preview_rs) =
+        build_replicasets_for_blue_green(&rollout, rollout.spec.replicas).unwrap();
+
+    // ASSERT: Active ReplicaSet
+    assert_eq!(
+        active_rs.metadata.name.as_deref(),
+        Some("blue-green-rollout-active")
+    );
+    assert_eq!(active_rs.spec.as_ref().unwrap().replicas, Some(3));
+    let active_labels = active_rs.metadata.labels.as_ref().unwrap();
+    assert_eq!(
+        active_labels.get("rollouts.kulta.io/type"),
+        Some(&"active".to_string())
+    );
+
+    // ASSERT: Preview ReplicaSet (same replica count - full environment)
+    assert_eq!(
+        preview_rs.metadata.name.as_deref(),
+        Some("blue-green-rollout-preview")
+    );
+    assert_eq!(preview_rs.spec.as_ref().unwrap().replicas, Some(3));
+    let preview_labels = preview_rs.metadata.labels.as_ref().unwrap();
+    assert_eq!(
+        preview_labels.get("rollouts.kulta.io/type"),
+        Some(&"preview".to_string())
+    );
+}
+
 // TDD Cycle 2 (Simple Strategy): Test that simple strategy creates single ReplicaSet
 #[test]
 fn test_simple_strategy_creates_single_replicaset() {
