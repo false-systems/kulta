@@ -108,12 +108,12 @@ pub async fn emit_status_change_event(
 ) -> Result<(), CDEventsError> {
     use crate::crd::rollout::Phase;
 
-    // Detect transition: None → Progressing/Completed = service.deployed
-    // (Simple strategy goes directly to Completed, Canary goes to Progressing)
+    // Detect transition: None → Progressing/Completed/Preview = service.deployed
+    // (Simple strategy goes directly to Completed, Canary goes to Progressing, Blue-green goes to Preview)
     let is_initialization = old_status.is_none()
         && matches!(
             new_status.phase,
-            Some(Phase::Progressing) | Some(Phase::Completed)
+            Some(Phase::Progressing) | Some(Phase::Completed) | Some(Phase::Preview)
         );
 
     // Detect step progression: Progressing → Progressing (different step)
@@ -493,6 +493,8 @@ fn build_kulta_custom_data(
 ) -> serde_json::Value {
     let strategy = if rollout.spec.strategy.canary.is_some() {
         "canary"
+    } else if rollout.spec.strategy.blue_green.is_some() {
+        "blue-green"
     } else {
         "simple"
     };
