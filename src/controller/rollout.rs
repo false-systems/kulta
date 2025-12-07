@@ -428,6 +428,18 @@ pub fn initialize_rollout_status(rollout: &Rollout) -> crate::crd::rollout::Roll
         };
     }
 
+    // Check for blue-green strategy
+    if rollout.spec.strategy.blue_green.is_some() {
+        // Blue-green strategy: preview RS ready, awaiting promotion
+        return RolloutStatus {
+            phase: Some(Phase::Preview),
+            current_step_index: None,
+            current_weight: None,
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        };
+    }
+
     // Get canary strategy
     let canary_strategy = match &rollout.spec.strategy.canary {
         Some(strategy) => strategy,
@@ -797,6 +809,85 @@ pub fn build_replicaset_for_simple(
     })
 }
 
+/// Build ReplicaSets for a blue-green strategy Rollout
+///
+/// Creates two full-size ReplicaSets:
+/// - Active: {rollout-name}-active (receives production traffic)
+/// - Preview: {rollout-name}-preview (for testing before promotion)
+///
+/// Unlike canary, both environments have ALL replicas (full environments).
+///
+/// # Returns
+/// Tuple of (active_rs, preview_rs)
+///
+/// # Errors
+/// Returns error if Rollout is missing name or if PodTemplateSpec cannot be serialized
+pub fn build_replicasets_for_blue_green(
+    rollout: &Rollout,
+    replicas: i32,
+) -> Result<(ReplicaSet, ReplicaSet), ReconcileError> {
+    let active_rs = build_replicaset_for_blue_green_type(rollout, "active", replicas)?;
+    let preview_rs = build_replicaset_for_blue_green_type(rollout, "preview", replicas)?;
+    Ok((active_rs, preview_rs))
+}
+
+/// Build a single ReplicaSet for blue-green strategy
+fn build_replicaset_for_blue_green_type(
+    rollout: &Rollout,
+    rs_type: &str,
+    replicas: i32,
+) -> Result<ReplicaSet, ReconcileError> {
+    let rollout_name = rollout
+        .metadata
+        .name
+        .as_ref()
+        .ok_or(ReconcileError::MissingName)?;
+    let namespace = rollout.metadata.namespace.clone();
+
+    // Compute pod template hash
+    let pod_template_hash = compute_pod_template_hash(&rollout.spec.template)?;
+
+    // Clone the pod template and add labels
+    let mut template = rollout.spec.template.clone();
+    let mut labels = template
+        .metadata
+        .as_ref()
+        .and_then(|m| m.labels.clone())
+        .unwrap_or_default();
+
+    labels.insert("pod-template-hash".to_string(), pod_template_hash.clone());
+    labels.insert("rollouts.kulta.io/type".to_string(), rs_type.to_string());
+    labels.insert("rollouts.kulta.io/managed".to_string(), "true".to_string());
+
+    // Update template metadata in place
+    let mut template_metadata = template.metadata.take().unwrap_or_default();
+    template_metadata.labels = Some(labels.clone());
+    template.metadata = Some(template_metadata);
+
+    // Build selector (must match pod labels)
+    let selector = LabelSelector {
+        match_labels: Some(labels.clone()),
+        ..Default::default()
+    };
+
+    // Build ReplicaSet with type suffix
+    Ok(ReplicaSet {
+        metadata: ObjectMeta {
+            name: Some(format!("{}-{}", rollout_name, rs_type)),
+            namespace,
+            labels: Some(labels),
+            ..Default::default()
+        },
+        spec: Some(ReplicaSetSpec {
+            replicas: Some(replicas),
+            selector,
+            template: Some(template),
+            ..Default::default()
+        }),
+        status: None,
+    })
+}
+
 /// Validate Rollout specification
 ///
 /// Validates runtime constraints that cannot be enforced via CRD schema.
@@ -918,6 +1009,20 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
             "Built simple ReplicaSet"
         );
         ensure_replicaset_exists(&rs_api, &rs, "simple", rollout.spec.replicas).await?;
+    } else if rollout.spec.strategy.blue_green.is_some() {
+        // Blue-green strategy: active + preview ReplicaSets (both full size)
+        let (active_rs, preview_rs) =
+            build_replicasets_for_blue_green(&rollout, rollout.spec.replicas)?;
+
+        info!(
+            rollout = ?name,
+            strategy = "blue-green",
+            replicas = rollout.spec.replicas,
+            "Built blue-green ReplicaSets"
+        );
+
+        ensure_replicaset_exists(&rs_api, &active_rs, "active", rollout.spec.replicas).await?;
+        ensure_replicaset_exists(&rs_api, &preview_rs, "preview", rollout.spec.replicas).await?;
     } else {
         // Canary strategy: stable + canary ReplicaSets with traffic-based scaling
         let current_weight = rollout

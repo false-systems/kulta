@@ -49,6 +49,10 @@ pub struct RolloutStrategy {
     /// Canary deployment strategy
     #[serde(skip_serializing_if = "Option::is_none")]
     pub canary: Option<CanaryStrategy>,
+
+    /// Blue-Green deployment strategy
+    #[serde(rename = "blueGreen", skip_serializing_if = "Option::is_none")]
+    pub blue_green: Option<BlueGreenStrategy>,
 }
 
 /// Simple deployment strategy
@@ -57,6 +61,44 @@ pub struct RolloutStrategy {
 /// No traffic splitting - just deploy, monitor metrics, and emit events.
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 pub struct SimpleStrategy {
+    /// Analysis configuration for automated metrics-based rollback
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<AnalysisConfig>,
+}
+
+/// Blue-Green deployment strategy
+///
+/// Maintains two full environments (active and preview).
+/// Traffic is 100% to active until promotion, then instant switch to preview.
+/// No gradual traffic shifting - instant cutover.
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct BlueGreenStrategy {
+    /// Name of the service that selects active pods (receives production traffic)
+    #[serde(rename = "activeService")]
+    pub active_service: String,
+
+    /// Name of the service that selects preview pods (for testing before promotion)
+    #[serde(rename = "previewService")]
+    pub preview_service: String,
+
+    /// Whether to automatically promote after autoPromotionSeconds
+    #[serde(
+        rename = "autoPromotionEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_promotion_enabled: Option<bool>,
+
+    /// Seconds to wait before auto-promoting (if autoPromotionEnabled)
+    #[serde(
+        rename = "autoPromotionSeconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_promotion_seconds: Option<i32>,
+
+    /// Traffic routing configuration
+    #[serde(rename = "trafficRouting", skip_serializing_if = "Option::is_none")]
+    pub traffic_routing: Option<TrafficRouting>,
+
     /// Analysis configuration for automated metrics-based rollback
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analysis: Option<AnalysisConfig>,
@@ -192,7 +234,9 @@ pub enum Phase {
     Progressing,
     /// Rollout is paused waiting for manual promotion or duration
     Paused,
-    /// Rollout successfully completed (100% canary)
+    /// Blue-green: Preview environment ready, awaiting promotion
+    Preview,
+    /// Rollout successfully completed (100% canary or promoted blue-green)
     Completed,
     /// Rollout failed and requires manual intervention
     Failed,

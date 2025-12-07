@@ -20,6 +20,7 @@ async fn test_emit_service_deployed_on_initialization() {
             template: create_test_pod_template("nginx:1.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -89,6 +90,7 @@ async fn test_emit_service_upgraded_on_step_progression() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -169,6 +171,7 @@ async fn test_emit_service_rolledback_on_failure() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -243,6 +246,7 @@ async fn test_emit_service_published_on_completion() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -325,6 +329,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
                 simple: None,
+                blue_green: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
@@ -414,6 +419,7 @@ async fn test_simple_strategy_emits_deployed_and_published() {
             strategy: RolloutStrategy {
                 simple: Some(SimpleStrategy { analysis: None }),
                 canary: None,
+                blue_green: None,
             },
         },
         status: None,
@@ -453,6 +459,154 @@ async fn test_simple_strategy_emits_deployed_and_published() {
         "dev.cdevents.service.published.0.2.0",
         "Second event should be service.published"
     );
+}
+
+// TDD: Test that blue-green strategy emits deployed when entering Preview phase
+#[tokio::test]
+async fn test_blue_green_emits_deployed_on_preview() {
+    use crate::crd::rollout::BlueGreenStrategy;
+    use cloudevents::AttributesReader;
+
+    // ARRANGE: Create rollout with blue-green strategy
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("blue-green-app".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: Default::default(),
+            template: create_test_pod_template("nginx:2.0"),
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: None,
+                blue_green: Some(BlueGreenStrategy {
+                    active_service: "my-app-active".to_string(),
+                    preview_service: "my-app-preview".to_string(),
+                    auto_promotion_enabled: Some(true),
+                    auto_promotion_seconds: Some(30),
+                    traffic_routing: None,
+                    analysis: None,
+                }),
+            },
+        },
+        status: None,
+    };
+
+    let sink = CDEventsSink::new_mock();
+
+    // New status: Preview phase (blue-green initialization)
+    let new_status = RolloutStatus {
+        phase: Some(Phase::Preview),
+        current_step_index: None,
+        current_weight: None,
+        message: Some("Blue-green: preview environment ready".to_string()),
+        ..Default::default()
+    };
+
+    // ACT: Emit status change event (None → Preview)
+    emit_status_change_event(&rollout, &None, &new_status, &sink)
+        .await
+        .expect("Event emission should succeed");
+
+    // ASSERT: service.deployed event emitted
+    let events = sink.get_emitted_events();
+    assert_eq!(
+        events.len(),
+        1,
+        "Blue-green should emit 1 event on initialization"
+    );
+    assert_eq!(
+        events[0].ty(),
+        "dev.cdevents.service.deployed.0.2.0",
+        "First event should be service.deployed"
+    );
+
+    // Verify customData contains blue-green strategy
+    let data = events[0].data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+    let kulta = &json["customData"]["kulta"];
+    assert_eq!(kulta["strategy"], "blue-green");
+}
+
+// TDD: Test that blue-green emits published when promoted (Preview → Completed)
+#[tokio::test]
+async fn test_blue_green_emits_published_on_promotion() {
+    use crate::crd::rollout::BlueGreenStrategy;
+    use cloudevents::AttributesReader;
+
+    // ARRANGE: Create rollout with blue-green strategy
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("blue-green-app".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: Default::default(),
+            template: create_test_pod_template("nginx:2.0"),
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: None,
+                blue_green: Some(BlueGreenStrategy {
+                    active_service: "my-app-active".to_string(),
+                    preview_service: "my-app-preview".to_string(),
+                    auto_promotion_enabled: Some(true),
+                    auto_promotion_seconds: Some(30),
+                    traffic_routing: None,
+                    analysis: None,
+                }),
+            },
+        },
+        status: None,
+    };
+
+    let sink = CDEventsSink::new_mock();
+
+    // Old status: Preview phase
+    let old_status = Some(RolloutStatus {
+        phase: Some(Phase::Preview),
+        current_step_index: None,
+        current_weight: None,
+        ..Default::default()
+    });
+
+    // New status: Completed (promoted)
+    let new_status = RolloutStatus {
+        phase: Some(Phase::Completed),
+        current_step_index: None,
+        current_weight: None,
+        message: Some("Blue-green: promoted to active".to_string()),
+        ..Default::default()
+    };
+
+    // ACT: Emit status change event (Preview → Completed)
+    emit_status_change_event(&rollout, &old_status, &new_status, &sink)
+        .await
+        .expect("Event emission should succeed");
+
+    // ASSERT: service.published event emitted
+    let events = sink.get_emitted_events();
+    assert_eq!(events.len(), 1, "Blue-green promotion should emit 1 event");
+    assert_eq!(
+        events[0].ty(),
+        "dev.cdevents.service.published.0.2.0",
+        "Promotion should emit service.published"
+    );
+
+    // Verify customData contains blue-green strategy
+    let data = events[0].data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+    let kulta = &json["customData"]["kulta"];
+    assert_eq!(kulta["strategy"], "blue-green");
 }
 
 // Helper to create test pod template
