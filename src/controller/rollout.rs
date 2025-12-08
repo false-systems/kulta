@@ -1151,6 +1151,64 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         }
     }
 
+    // Evaluate metrics (if analysis config exists and rollout is progressing)
+    if let Some(current_status) = &rollout.status {
+        if current_status.phase == Some(Phase::Progressing) {
+            // Check metrics health
+            let is_healthy = evaluate_rollout_metrics(&rollout, &ctx).await?;
+
+            if !is_healthy {
+                // Metrics unhealthy - trigger rollback
+                warn!(
+                    rollout = ?name,
+                    "Metrics unhealthy, triggering rollback"
+                );
+
+                // Create failed status
+                let failed_status = crate::crd::rollout::RolloutStatus {
+                    phase: Some(Phase::Failed),
+                    message: Some("Rollback triggered: metrics exceeded thresholds".to_string()),
+                    ..current_status.clone()
+                };
+
+                // Emit rollback CDEvent
+                if let Err(e) = emit_status_change_event(
+                    &rollout,
+                    &rollout.status,
+                    &failed_status,
+                    &ctx.cdevents_sink,
+                )
+                .await
+                {
+                    warn!(
+                        error = ?e,
+                        rollout = ?name,
+                        "Failed to emit rollback CDEvent (non-fatal)"
+                    );
+                }
+
+                // Update status to Failed
+                use kube::api::{Patch, PatchParams};
+                let rollout_api: Api<Rollout> = Api::namespaced(ctx.client.clone(), &namespace);
+                let status_patch = serde_json::json!({
+                    "status": failed_status
+                });
+
+                rollout_api
+                    .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+                    .await?;
+
+                info!(
+                    rollout = ?name,
+                    "Rollout marked as Failed due to unhealthy metrics"
+                );
+
+                // Requeue to monitor if metrics recover
+                return Ok(Action::requeue(Duration::from_secs(30)));
+            }
+        }
+    }
+
     // Check if promote annotation exists BEFORE computing status (to avoid race condition)
     let had_promote_annotation = has_promote_annotation(&rollout);
     let was_paused_before = rollout
@@ -1284,7 +1342,6 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
 /// * `Ok(true)` - All metrics healthy (or no analysis config)
 /// * `Ok(false)` - One or more metrics unhealthy
 /// * `Err(_)` - Query execution failed
-#[allow(dead_code)] // Will be used in reconcile loop (TDD Cycle 4 Part 2)
 async fn evaluate_rollout_metrics(
     rollout: &Rollout,
     ctx: &Context,
