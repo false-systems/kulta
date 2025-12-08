@@ -47,3 +47,16 @@ serde_yaml = "0.9"
 async-trait = "0.1"
 reqwest = "0.12"
 toml = "0.8"
+
+# CI pipeline definition
+[dependencies.sykli]
+path = "../sykli/sdk/rust"
+optional = true
+
+[[bin]]
+name = "sykli"
+path = "sykli.rs"
+required-features = ["sykli"]
+
+[features]
+default = []
