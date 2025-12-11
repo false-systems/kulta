@@ -33,5 +33,12 @@ fn main() {
         .env("KULTA_RUN_SEPPO_TESTS", "1")
         .inputs(&["tests/seppo_integration_test.rs", "**/*.rs", "Cargo.toml"]);
 
+    // Stress tests (requires kind cluster with resources)
+    // Run manually: KULTA_RUN_STRESS_TESTS=1 cargo test --test stress_test -- --ignored --nocapture
+    p.task("stress-test")
+        .run("cargo test --test stress_test -- --ignored --nocapture")
+        .env("KULTA_RUN_STRESS_TESTS", "1")
+        .inputs(&["tests/stress_test.rs", "**/*.rs", "Cargo.toml"]);
+
     p.emit();
 }
