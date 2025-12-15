@@ -18,6 +18,9 @@ pub enum PrometheusError {
 
     #[error("No data returned from Prometheus")]
     NoData,
+
+    #[error("Invalid metric value: {0}")]
+    InvalidValue(String),
 }
 
 /// Build PromQL query for error rate metric
@@ -89,6 +92,14 @@ fn parse_prometheus_instant_query(json_response: &str) -> Result<f64, Prometheus
         .1
         .parse::<f64>()
         .map_err(|e| PrometheusError::ParseError(format!("Invalid value: {}", e)))?;
+
+    // Reject NaN and infinity values
+    if value.is_nan() {
+        return Err(PrometheusError::InvalidValue("NaN".to_string()));
+    }
+    if value.is_infinite() {
+        return Err(PrometheusError::InvalidValue("infinity".to_string()));
+    }
 
     Ok(value)
 }
@@ -597,5 +608,51 @@ mod tests {
             ),
             Err(e) => panic!("Should evaluate successfully, got error: {}", e),
         }
+    }
+
+    #[test]
+    fn test_parse_prometheus_response_nan_returns_error() {
+        // Prometheus can return "NaN" as value when there's no data in the time window
+        let json_response = r#"{
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [
+                    {
+                        "metric": {},
+                        "value": [1234567890, "NaN"]
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parse_prometheus_instant_query(json_response);
+        assert!(
+            matches!(result, Err(PrometheusError::InvalidValue(_))),
+            "NaN value should return InvalidValue error"
+        );
+    }
+
+    #[test]
+    fn test_parse_prometheus_response_infinity_returns_error() {
+        // Prometheus can return "+Inf" or "-Inf" for division by zero
+        let json_response = r#"{
+            "status": "success",
+            "data": {
+                "resultType": "vector",
+                "result": [
+                    {
+                        "metric": {},
+                        "value": [1234567890, "+Inf"]
+                    }
+                ]
+            }
+        }"#;
+
+        let result = parse_prometheus_instant_query(json_response);
+        assert!(
+            matches!(result, Err(PrometheusError::InvalidValue(_))),
+            "+Inf value should return InvalidValue error"
+        );
     }
 }
