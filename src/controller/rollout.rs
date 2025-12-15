@@ -125,7 +125,7 @@ pub fn compute_pod_template_hash(template: &PodTemplateSpec) -> Result<String, R
 /// assert_eq!(stable, 1); // 50% of 3 → 1 stable, 2 canary (ceil)
 /// assert_eq!(canary, 2);
 /// ```
-fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32) {
+pub fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32) {
     // Calculate canary replicas (ceiling to ensure at least 1 if weight > 0)
     let canary_replicas = if canary_weight == 0 {
         0

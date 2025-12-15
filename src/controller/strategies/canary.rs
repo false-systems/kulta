@@ -3,9 +3,16 @@
 //! Progressive traffic shifting with gradual rollout through defined steps.
 
 use super::{RolloutStrategy, StrategyError};
-use crate::controller::rollout::Context;
+use crate::controller::rollout::{
+    build_gateway_api_backend_refs, build_replicaset, calculate_replica_split,
+    compute_desired_status, ensure_replicaset_exists, Context,
+};
 use crate::crd::rollout::{Rollout, RolloutStatus};
 use async_trait::async_trait;
+use k8s_openapi::api::apps::v1::ReplicaSet;
+use kube::api::Api;
+use kube::ResourceExt;
+use tracing::{error, info, warn};
 
 /// Canary strategy handler
 ///
@@ -24,32 +31,316 @@ impl RolloutStrategy for CanaryStrategyHandler {
 
     async fn reconcile_replicasets(
         &self,
-        _rollout: &Rollout,
-        _ctx: &Context,
+        rollout: &Rollout,
+        ctx: &Context,
     ) -> Result<(), StrategyError> {
-        // TODO: Implement canary ReplicaSet reconciliation
-        todo!("Canary reconcile_replicasets not yet implemented")
+        let namespace = rollout
+            .namespace()
+            .ok_or_else(|| StrategyError::MissingField("namespace".to_string()))?;
+        let name = rollout.name_any();
+
+        // Get current canary weight from status
+        let current_weight = rollout
+            .status
+            .as_ref()
+            .and_then(|s| s.current_weight)
+            .unwrap_or(0);
+
+        // Calculate replica split based on weight
+        let (stable_replicas, canary_replicas) =
+            calculate_replica_split(rollout.spec.replicas, current_weight);
+
+        info!(
+            rollout = ?name,
+            strategy = "canary",
+            total_replicas = rollout.spec.replicas,
+            current_weight = current_weight,
+            stable_replicas = stable_replicas,
+            canary_replicas = canary_replicas,
+            "Reconciling canary strategy ReplicaSets"
+        );
+
+        // Create ReplicaSet API client
+        let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
+
+        // Build and ensure stable ReplicaSet exists
+        let stable_rs = build_replicaset(rollout, "stable", stable_replicas)
+            .map_err(|e| StrategyError::ReplicaSetReconciliationFailed(e.to_string()))?;
+
+        ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas)
+            .await
+            .map_err(|e| StrategyError::ReplicaSetReconciliationFailed(e.to_string()))?;
+
+        // Build and ensure canary ReplicaSet exists
+        let canary_rs = build_replicaset(rollout, "canary", canary_replicas)
+            .map_err(|e| StrategyError::ReplicaSetReconciliationFailed(e.to_string()))?;
+
+        ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas)
+            .await
+            .map_err(|e| StrategyError::ReplicaSetReconciliationFailed(e.to_string()))?;
+
+        info!(
+            rollout = ?name,
+            stable_replicas = stable_replicas,
+            canary_replicas = canary_replicas,
+            "Canary strategy ReplicaSets reconciled successfully"
+        );
+
+        Ok(())
     }
 
     async fn reconcile_traffic(
         &self,
-        _rollout: &Rollout,
-        _ctx: &Context,
+        rollout: &Rollout,
+        ctx: &Context,
     ) -> Result<(), StrategyError> {
-        // TODO: Implement canary traffic routing
-        todo!("Canary reconcile_traffic not yet implemented")
+        // Check if canary strategy has traffic routing configured
+        let canary_strategy = match &rollout.spec.strategy.canary {
+            Some(strategy) => strategy,
+            None => {
+                // No canary strategy defined (shouldn't happen if we're selected)
+                return Ok(());
+            }
+        };
+
+        let traffic_routing = match &canary_strategy.traffic_routing {
+            Some(routing) => routing,
+            None => {
+                // No traffic routing configured - this is OK, traffic routing is optional
+                return Ok(());
+            }
+        };
+
+        let gateway_api_routing = match &traffic_routing.gateway_api {
+            Some(routing) => routing,
+            None => {
+                // No Gateway API routing configured
+                return Ok(());
+            }
+        };
+
+        let namespace = rollout
+            .namespace()
+            .ok_or_else(|| StrategyError::MissingField("namespace".to_string()))?;
+        let name = rollout.name_any();
+        let httproute_name = &gateway_api_routing.http_route;
+
+        info!(
+            rollout = ?name,
+            httproute = ?httproute_name,
+            strategy = "canary",
+            "Updating HTTPRoute with weighted backends"
+        );
+
+        // Build the weighted backend refs
+        let backend_refs = build_gateway_api_backend_refs(rollout);
+
+        // Create JSON patch to update HTTPRoute's first rule's backendRefs
+        let patch_json = serde_json::json!({
+            "spec": {
+                "rules": [{
+                    "backendRefs": backend_refs
+                }]
+            }
+        });
+
+        // Create HTTPRoute API client using DynamicObject
+        use kube::api::{Api, Patch, PatchParams};
+        use kube::core::DynamicObject;
+        use kube::discovery::ApiResource;
+
+        let ar = ApiResource {
+            group: "gateway.networking.k8s.io".to_string(),
+            version: "v1".to_string(),
+            api_version: "gateway.networking.k8s.io/v1".to_string(),
+            kind: "HTTPRoute".to_string(),
+            plural: "httproutes".to_string(),
+        };
+
+        let httproute_api: Api<DynamicObject> =
+            Api::namespaced_with(ctx.client.clone(), &namespace, &ar);
+
+        // Apply the patch
+        match httproute_api
+            .patch(
+                httproute_name,
+                &PatchParams::default(),
+                &Patch::Merge(&patch_json),
+            )
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    rollout = ?name,
+                    httproute = ?httproute_name,
+                    stable_weight = backend_refs.first().and_then(|b| b.weight),
+                    canary_weight = backend_refs.get(1).and_then(|b| b.weight),
+                    "HTTPRoute updated successfully (canary)"
+                );
+                Ok(())
+            }
+            Err(kube::Error::Api(err)) if err.code == 404 => {
+                // HTTPRoute not found - this is non-fatal, traffic routing is optional
+                warn!(
+                    rollout = ?name,
+                    httproute = ?httproute_name,
+                    "HTTPRoute not found - skipping traffic routing update"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                error!(
+                    error = ?e,
+                    rollout = ?name,
+                    httproute = ?httproute_name,
+                    "Failed to patch HTTPRoute"
+                );
+                Err(StrategyError::TrafficReconciliationFailed(e.to_string()))
+            }
+        }
     }
 
-    fn compute_next_status(&self, _rollout: &Rollout) -> RolloutStatus {
-        // TODO: Implement canary status computation
-        todo!("Canary compute_next_status not yet implemented")
+    fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus {
+        // Use the existing compute_desired_status function which handles:
+        // - Initialization
+        // - Step progression
+        // - Pause logic
+        // - Completion detection
+        compute_desired_status(rollout)
     }
 
     fn supports_metrics_analysis(&self) -> bool {
-        true // Canary supports metrics analysis
+        // Canary strategy always supports metrics analysis if configured
+        true
     }
 
     fn supports_manual_promotion(&self) -> bool {
-        true // Canary supports manual promotion via kulta.io/promote annotation
+        // Canary strategy supports manual promotion via kulta.io/promote annotation
+        true
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::crd::rollout::{
+        CanaryStep, CanaryStrategy, GatewayAPIRouting, PauseDuration, Phase, RolloutSpec,
+        RolloutStrategy as RolloutStrategySpec, TrafficRouting,
+    };
+    use k8s_openapi::api::core::v1::PodTemplateSpec;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
+
+    fn create_canary_rollout(
+        replicas: i32,
+        current_weight: Option<i32>,
+        steps: Vec<CanaryStep>,
+    ) -> Rollout {
+        Rollout {
+            metadata: kube::api::ObjectMeta {
+                name: Some("test-canary-rollout".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: RolloutSpec {
+                replicas,
+                selector: LabelSelector::default(),
+                template: PodTemplateSpec::default(),
+                strategy: RolloutStrategySpec {
+                    simple: None,
+                    canary: Some(CanaryStrategy {
+                        canary_service: "app-canary".to_string(),
+                        stable_service: "app-stable".to_string(),
+                        steps,
+                        traffic_routing: Some(TrafficRouting {
+                            gateway_api: Some(GatewayAPIRouting {
+                                http_route: "app-route".to_string(),
+                            }),
+                        }),
+                        analysis: None,
+                    }),
+                    blue_green: None,
+                },
+            },
+            status: current_weight.map(|weight| crate::crd::rollout::RolloutStatus {
+                phase: Some(Phase::Progressing),
+                current_step_index: Some(0),
+                current_weight: Some(weight),
+                replicas: replicas,
+                ready_replicas: 0,
+                updated_replicas: 0,
+                message: None,
+                pause_start_time: None,
+                decisions: vec![],
+            }),
+        }
+    }
+
+    #[test]
+    fn test_canary_strategy_name() {
+        let strategy = CanaryStrategyHandler;
+        assert_eq!(strategy.name(), "canary");
+    }
+
+    #[test]
+    fn test_canary_strategy_supports_metrics_analysis() {
+        let strategy = CanaryStrategyHandler;
+        assert!(strategy.supports_metrics_analysis());
+    }
+
+    #[test]
+    fn test_canary_strategy_supports_manual_promotion() {
+        let strategy = CanaryStrategyHandler;
+        assert!(strategy.supports_manual_promotion());
+    }
+
+    #[test]
+    fn test_canary_strategy_compute_next_status_no_status() {
+        let steps = vec![
+            CanaryStep {
+                set_weight: Some(10),
+                pause: None,
+            },
+            CanaryStep {
+                set_weight: Some(50),
+                pause: Some(PauseDuration {
+                    duration: Some("30s".to_string()),
+                }),
+            },
+        ];
+        let rollout = create_canary_rollout(3, None, steps);
+        let strategy = CanaryStrategyHandler;
+
+        let status = strategy.compute_next_status(&rollout);
+
+        // Should initialize to step 0 with 10% weight
+        assert_eq!(status.phase, Some(Phase::Progressing));
+        assert_eq!(status.current_step_index, Some(0));
+        assert_eq!(status.current_weight, Some(10));
+    }
+
+    #[test]
+    fn test_canary_strategy_compute_next_status_with_status() {
+        let steps = vec![
+            CanaryStep {
+                set_weight: Some(10),
+                pause: None,
+            },
+            CanaryStep {
+                set_weight: Some(100),
+                pause: None,
+            },
+        ];
+        let rollout = create_canary_rollout(3, Some(10), steps);
+        let strategy = CanaryStrategyHandler;
+
+        let status = strategy.compute_next_status(&rollout);
+
+        // Should progress to step 1 (100% weight = completed)
+        assert_eq!(status.phase, Some(Phase::Completed));
+        assert_eq!(status.current_step_index, Some(1));
+        assert_eq!(status.current_weight, Some(100));
+    }
+
+    // Note: reconcile_replicasets() and reconcile_traffic() require K8s API
+    // These are tested in integration tests
 }
