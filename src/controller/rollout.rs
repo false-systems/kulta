@@ -975,6 +975,11 @@ fn validate_rollout(rollout: &Rollout) -> Result<(), String> {
             return Err("spec.strategy.canary.stableService cannot be empty".to_string());
         }
 
+        // Validate at least one step exists
+        if canary.steps.is_empty() {
+            return Err("spec.strategy.canary.steps must have at least one step".to_string());
+        }
+
         // Validate each step
         for (i, step) in canary.steps.iter().enumerate() {
             // Validate weight is in 0-100 range

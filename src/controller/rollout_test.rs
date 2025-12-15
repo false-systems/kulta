@@ -2456,6 +2456,11 @@ async fn test_validate_rollout_empty_stable_service() {
 async fn test_validate_rollout_empty_httproute() {
     // ARRANGE: Create rollout with empty HTTPRoute name
     let mut rollout = create_test_rollout_with_canary();
+    // Add a valid step (required for validation to reach HTTPRoute check)
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![CanaryStep {
+        set_weight: Some(50),
+        pause: None,
+    }];
     rollout
         .spec
         .strategy
@@ -2518,6 +2523,28 @@ async fn test_validate_rollout_valid_rollout() {
         result.is_ok(),
         "Expected valid rollout to pass, got error: {:?}",
         result
+    );
+}
+
+#[tokio::test]
+async fn test_validate_rollout_rejects_empty_canary_steps() {
+    // ARRANGE: Create rollout with empty steps
+    let mut rollout = create_test_rollout_with_canary();
+    rollout.spec.strategy.canary.as_mut().unwrap().steps = vec![];
+
+    // ACT: Validate rollout
+    let result = validate_rollout(&rollout);
+
+    // ASSERT: Should fail validation - empty steps causes instant completion
+    assert!(
+        result.is_err(),
+        "Expected empty canary steps to be rejected"
+    );
+    let error = result.unwrap_err();
+    assert!(
+        error.contains("at least one step"),
+        "Error should mention empty steps, got: {}",
+        error
     );
 }
 
