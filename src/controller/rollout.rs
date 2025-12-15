@@ -147,7 +147,7 @@ fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32
 /// - Return Ok if ReplicaSet already exists
 /// - Create ReplicaSet if it doesn't exist (404)
 /// - Return Err on other API errors
-async fn ensure_replicaset_exists(
+pub async fn ensure_replicaset_exists(
     rs_api: &Api<ReplicaSet>,
     rs: &ReplicaSet,
     rs_type: &str,
