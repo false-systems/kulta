@@ -94,10 +94,9 @@ impl RolloutStrategy for SimpleStrategyHandler {
     }
 
     fn supports_metrics_analysis(&self) -> bool {
-        // Simple strategy can support metrics analysis if configured
-        // NOTE: This returns false here because we need the rollout to check config.
-        // The actual check happens in reconcile() where we have access to the rollout.
-        false
+        // Simple strategy supports metrics analysis when configured
+        // Reconcile loop will check if analysis config exists before evaluating
+        true
     }
 
     fn supports_manual_promotion(&self) -> bool {
@@ -180,12 +179,12 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_strategy_does_not_support_metrics_analysis() {
+    fn test_simple_strategy_supports_metrics_analysis() {
         let strategy = SimpleStrategyHandler;
 
-        // Simple strategy returns false for metrics analysis
-        // Actual metrics check happens in reconcile() if analysis config exists
-        assert!(!strategy.supports_metrics_analysis());
+        // Simple strategy DOES support metrics analysis
+        // Reconcile loop checks if analysis config exists before evaluating
+        assert!(strategy.supports_metrics_analysis());
     }
 
     #[test]
