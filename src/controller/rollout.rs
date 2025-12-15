@@ -1412,7 +1412,7 @@ pub fn parse_duration(duration_str: &str) -> Option<Duration> {
 ///
 /// # Returns
 /// true if annotation exists with value "true", false otherwise
-fn has_promote_annotation(rollout: &Rollout) -> bool {
+pub fn has_promote_annotation(rollout: &Rollout) -> bool {
     rollout
         .metadata
         .annotations

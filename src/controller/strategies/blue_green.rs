@@ -6,9 +6,9 @@
 use super::{RolloutStrategy, StrategyError};
 use crate::controller::rollout::{
     build_gateway_api_backend_refs, build_replicasets_for_blue_green, ensure_replicaset_exists,
-    initialize_rollout_status, Context,
+    has_promote_annotation, initialize_rollout_status, Context,
 };
-use crate::crd::rollout::{Rollout, RolloutStatus};
+use crate::crd::rollout::{Phase, Rollout, RolloutStatus};
 use async_trait::async_trait;
 use k8s_openapi::api::apps::v1::ReplicaSet;
 use kube::api::Api;
@@ -187,9 +187,54 @@ impl RolloutStrategy for BlueGreenStrategyHandler {
     }
 
     fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus {
-        // For blue-green, use initialize_rollout_status which sets Preview phase
-        // The reconcile() loop will handle promotion logic
-        initialize_rollout_status(rollout)
+        // If no status exists, initialize to Preview phase
+        let current_status = match &rollout.status {
+            Some(status) => status,
+            None => return initialize_rollout_status(rollout),
+        };
+
+        // Get current phase
+        let current_phase = current_status
+            .phase
+            .as_ref()
+            .cloned()
+            .unwrap_or(Phase::Preview);
+
+        match current_phase {
+            Phase::Preview => {
+                // Check for manual promotion annotation
+                if has_promote_annotation(rollout) {
+                    info!(
+                        rollout = ?rollout.name_any(),
+                        "Blue-green promotion triggered via annotation"
+                    );
+                    return RolloutStatus {
+                        phase: Some(Phase::Completed),
+                        message: Some(
+                            "Blue-green rollout completed: promoted to production".to_string(),
+                        ),
+                        ..current_status.clone()
+                    };
+                }
+
+                // TODO: Add auto-promotion timer support in future sprint
+
+                // Stay in Preview phase
+                current_status.clone()
+            }
+            Phase::Completed => {
+                // Already completed, return as-is
+                current_status.clone()
+            }
+            Phase::Failed => {
+                // Failed, return as-is
+                current_status.clone()
+            }
+            _ => {
+                // Unexpected phase for blue-green, reinitialize
+                initialize_rollout_status(rollout)
+            }
+        }
     }
 
     fn supports_metrics_analysis(&self) -> bool {
@@ -282,4 +327,59 @@ mod tests {
 
     // Note: reconcile_replicasets() and reconcile_traffic() require K8s API
     // These are tested in integration tests
+
+    // TDD RED: Test that promotion annotation transitions to Completed
+    #[test]
+    fn test_blue_green_promotion_annotation_transitions_to_completed() {
+        use std::collections::BTreeMap;
+
+        let mut rollout = create_blue_green_rollout(5);
+
+        // Set existing status to Preview (simulating previous reconcile)
+        rollout.status = Some(crate::crd::rollout::RolloutStatus {
+            phase: Some(Phase::Preview),
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        });
+
+        // Add promote annotation
+        let mut annotations = BTreeMap::new();
+        annotations.insert("kulta.io/promote".to_string(), "true".to_string());
+        rollout.metadata.annotations = Some(annotations);
+
+        let strategy = BlueGreenStrategyHandler;
+        let status = strategy.compute_next_status(&rollout);
+
+        // After promotion, should transition to Completed
+        assert_eq!(
+            status.phase,
+            Some(Phase::Completed),
+            "Blue-green with promote annotation should transition to Completed"
+        );
+    }
+
+    // TDD RED: Test that rollout stays in Preview without promotion
+    #[test]
+    fn test_blue_green_stays_in_preview_without_promotion() {
+        let mut rollout = create_blue_green_rollout(5);
+
+        // Set existing status to Preview (simulating previous reconcile)
+        rollout.status = Some(crate::crd::rollout::RolloutStatus {
+            phase: Some(Phase::Preview),
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        });
+
+        // No promote annotation
+
+        let strategy = BlueGreenStrategyHandler;
+        let status = strategy.compute_next_status(&rollout);
+
+        // Without promotion, should stay in Preview
+        assert_eq!(
+            status.phase,
+            Some(Phase::Preview),
+            "Blue-green without promote annotation should stay in Preview"
+        );
+    }
 }
