@@ -24,6 +24,54 @@ use tracing::{error, info, warn};
 /// - Optional auto-promotion after duration
 pub struct BlueGreenStrategyHandler;
 
+impl BlueGreenStrategyHandler {
+    /// Check if auto-promotion should trigger based on elapsed time
+    ///
+    /// Returns true if:
+    /// - auto_promotion_enabled is true
+    /// - auto_promotion_seconds is configured
+    /// - pause_start_time is set (when preview started)
+    /// - elapsed time >= auto_promotion_seconds
+    fn should_auto_promote(&self, rollout: &Rollout, status: &RolloutStatus) -> bool {
+        // Get blue-green strategy config
+        let blue_green = match &rollout.spec.strategy.blue_green {
+            Some(bg) => bg,
+            None => return false,
+        };
+
+        // Check if auto-promotion is enabled
+        let auto_enabled = blue_green.auto_promotion_enabled.unwrap_or(false);
+        if !auto_enabled {
+            return false;
+        }
+
+        // Get auto-promotion duration
+        let auto_seconds = match blue_green.auto_promotion_seconds {
+            Some(secs) => secs,
+            None => return false,
+        };
+
+        // Get preview start time from status
+        let preview_start_str = match &status.pause_start_time {
+            Some(ts) => ts,
+            None => return false,
+        };
+
+        // Parse preview start time
+        let preview_start = match chrono::DateTime::parse_from_rfc3339(preview_start_str) {
+            Ok(ts) => ts,
+            Err(_) => return false,
+        };
+
+        // Calculate elapsed time
+        let now = chrono::Utc::now();
+        let elapsed = now.signed_duration_since(preview_start);
+
+        // Check if auto-promotion time has passed
+        elapsed.num_seconds() >= i64::from(auto_seconds)
+    }
+}
+
 #[async_trait]
 impl RolloutStrategy for BlueGreenStrategyHandler {
     fn name(&self) -> &'static str {
@@ -217,7 +265,21 @@ impl RolloutStrategy for BlueGreenStrategyHandler {
                     };
                 }
 
-                // TODO: Add auto-promotion timer support in future sprint
+                // Check for auto-promotion timer
+                if self.should_auto_promote(rollout, current_status) {
+                    info!(
+                        rollout = ?rollout.name_any(),
+                        "Blue-green auto-promotion triggered: time elapsed"
+                    );
+                    return RolloutStatus {
+                        phase: Some(Phase::Completed),
+                        message: Some(
+                            "Blue-green rollout completed: auto-promoted after duration"
+                                .to_string(),
+                        ),
+                        ..current_status.clone()
+                    };
+                }
 
                 // Stay in Preview phase
                 current_status.clone()
@@ -380,6 +442,127 @@ mod tests {
             status.phase,
             Some(Phase::Preview),
             "Blue-green without promote annotation should stay in Preview"
+        );
+    }
+
+    fn create_blue_green_rollout_with_auto_promotion(
+        replicas: i32,
+        auto_promotion_enabled: bool,
+        auto_promotion_seconds: i32,
+    ) -> Rollout {
+        Rollout {
+            metadata: kube::api::ObjectMeta {
+                name: Some("test-bg-rollout".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: RolloutSpec {
+                replicas,
+                selector: LabelSelector::default(),
+                template: PodTemplateSpec::default(),
+                strategy: RolloutStrategySpec {
+                    simple: None,
+                    canary: None,
+                    blue_green: Some(BlueGreenStrategy {
+                        active_service: "app-active".to_string(),
+                        preview_service: "app-preview".to_string(),
+                        auto_promotion_enabled: Some(auto_promotion_enabled),
+                        auto_promotion_seconds: Some(auto_promotion_seconds),
+                        traffic_routing: None,
+                        analysis: None,
+                    }),
+                },
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn test_blue_green_auto_promotion_triggers_when_time_elapsed() {
+        use chrono::{Duration, Utc};
+
+        let mut rollout = create_blue_green_rollout_with_auto_promotion(5, true, 60);
+
+        // Set preview start time to 2 minutes ago (well past the 60s threshold)
+        let preview_start = Utc::now() - Duration::seconds(120);
+        rollout.status = Some(crate::crd::rollout::RolloutStatus {
+            phase: Some(Phase::Preview),
+            pause_start_time: Some(preview_start.to_rfc3339()),
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        });
+
+        let strategy = BlueGreenStrategyHandler;
+        let status = strategy.compute_next_status(&rollout);
+
+        assert_eq!(
+            status.phase,
+            Some(Phase::Completed),
+            "Blue-green should auto-promote to Completed when time elapsed"
+        );
+    }
+
+    #[test]
+    fn test_blue_green_auto_promotion_does_not_trigger_before_time() {
+        use chrono::{Duration, Utc};
+
+        let mut rollout = create_blue_green_rollout_with_auto_promotion(5, true, 300);
+
+        // Set preview start time to 30 seconds ago (before 300s threshold)
+        let preview_start = Utc::now() - Duration::seconds(30);
+        rollout.status = Some(crate::crd::rollout::RolloutStatus {
+            phase: Some(Phase::Preview),
+            pause_start_time: Some(preview_start.to_rfc3339()),
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        });
+
+        let strategy = BlueGreenStrategyHandler;
+        let status = strategy.compute_next_status(&rollout);
+
+        assert_eq!(
+            status.phase,
+            Some(Phase::Preview),
+            "Blue-green should stay in Preview before auto-promotion time"
+        );
+    }
+
+    #[test]
+    fn test_blue_green_auto_promotion_disabled() {
+        use chrono::{Duration, Utc};
+
+        let mut rollout = create_blue_green_rollout_with_auto_promotion(5, false, 60);
+
+        // Set preview start time to 2 minutes ago (past the threshold)
+        let preview_start = Utc::now() - Duration::seconds(120);
+        rollout.status = Some(crate::crd::rollout::RolloutStatus {
+            phase: Some(Phase::Preview),
+            pause_start_time: Some(preview_start.to_rfc3339()),
+            message: Some("Blue-green rollout: preview environment ready".to_string()),
+            ..Default::default()
+        });
+
+        let strategy = BlueGreenStrategyHandler;
+        let status = strategy.compute_next_status(&rollout);
+
+        assert_eq!(
+            status.phase,
+            Some(Phase::Preview),
+            "Blue-green should stay in Preview when auto-promotion is disabled"
+        );
+    }
+
+    #[test]
+    fn test_blue_green_initialization_sets_pause_start_time() {
+        let rollout = create_blue_green_rollout_with_auto_promotion(5, true, 60);
+        let strategy = BlueGreenStrategyHandler;
+
+        let status = strategy.compute_next_status(&rollout);
+
+        assert_eq!(status.phase, Some(Phase::Preview));
+        assert!(
+            status.pause_start_time.is_some(),
+            "Blue-green initialization should set pause_start_time for auto-promotion tracking"
         );
     }
 }
