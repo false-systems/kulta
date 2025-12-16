@@ -155,34 +155,13 @@ impl RolloutStrategy for BlueGreenStrategyHandler {
             )
             .await
         {
-            Ok(_) => {
-                info!(
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    active_weight = backend_refs.first().and_then(|b| b.weight),
-                    preview_weight = backend_refs.get(1).and_then(|b| b.weight),
-                    "HTTPRoute updated successfully (blue-green)"
-                );
-                Ok(())
-            }
-            Err(kube::Error::Api(err)) if err.code == 404 => {
-                // HTTPRoute not found - this is non-fatal, traffic routing is optional
-                warn!(
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    "HTTPRoute not found - skipping traffic routing update"
-                );
-                Ok(())
-            }
-            Err(e) => {
-                error!(
-                    error = ?e,
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    "Failed to patch HTTPRoute"
-                );
-                Err(StrategyError::TrafficReconciliationFailed(e.to_string()))
-            }
+            patch_httproute_with_logging(
+                &name,
+                &httproute_name,
+                &backend_refs,
+                res,
+                "blue-green",
+            )
         }
     }
 
