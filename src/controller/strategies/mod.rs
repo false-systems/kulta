@@ -12,7 +12,9 @@ pub mod simple;
 use crate::controller::rollout::Context;
 use crate::crd::rollout::{Rollout, RolloutStatus};
 use async_trait::async_trait;
+use gateway_api::apis::standard::httproutes::HTTPRouteRulesBackendRefs;
 use thiserror::Error;
+use tracing::{error, info, warn};
 
 /// Errors specific to strategy reconciliation
 #[derive(Debug, Error)]
@@ -28,6 +30,103 @@ pub enum StrategyError {
 
     #[error("Missing required field: {0}")]
     MissingField(String),
+}
+
+/// Patch an HTTPRoute with weighted backend refs
+///
+/// This shared helper handles the common logic for updating Gateway API HTTPRoute
+/// resources with weighted backends. Used by both canary and blue-green strategies.
+///
+/// # Arguments
+/// * `ctx` - Controller context with k8s client
+/// * `namespace` - Namespace of the HTTPRoute
+/// * `httproute_name` - Name of the HTTPRoute to patch
+/// * `backend_refs` - Weighted backend refs to set
+/// * `rollout_name` - Rollout name for logging
+/// * `strategy_name` - Strategy name for logging ("canary" or "blue-green")
+///
+/// # Returns
+/// * `Ok(())` - HTTPRoute patched successfully or not found (non-fatal)
+/// * `Err(StrategyError)` - Patch failed
+pub async fn patch_httproute_weights(
+    ctx: &Context,
+    namespace: &str,
+    httproute_name: &str,
+    backend_refs: Vec<HTTPRouteRulesBackendRefs>,
+    rollout_name: &str,
+    strategy_name: &str,
+) -> Result<(), StrategyError> {
+    use kube::api::{Api, Patch, PatchParams};
+    use kube::core::DynamicObject;
+    use kube::discovery::ApiResource;
+
+    info!(
+        rollout = ?rollout_name,
+        httproute = ?httproute_name,
+        strategy = strategy_name,
+        "Updating HTTPRoute with weighted backends"
+    );
+
+    // Create JSON patch to update HTTPRoute's first rule's backendRefs
+    let patch_json = serde_json::json!({
+        "spec": {
+            "rules": [{
+                "backendRefs": backend_refs
+            }]
+        }
+    });
+
+    // Create HTTPRoute API client using DynamicObject
+    let ar = ApiResource {
+        group: "gateway.networking.k8s.io".to_string(),
+        version: "v1".to_string(),
+        api_version: "gateway.networking.k8s.io/v1".to_string(),
+        kind: "HTTPRoute".to_string(),
+        plural: "httproutes".to_string(),
+    };
+
+    let httproute_api: Api<DynamicObject> =
+        Api::namespaced_with(ctx.client.clone(), namespace, &ar);
+
+    // Apply the patch
+    match httproute_api
+        .patch(
+            httproute_name,
+            &PatchParams::default(),
+            &Patch::Merge(&patch_json),
+        )
+        .await
+    {
+        Ok(_) => {
+            info!(
+                rollout = ?rollout_name,
+                httproute = ?httproute_name,
+                weight_0 = backend_refs.first().and_then(|b| b.weight),
+                weight_1 = backend_refs.get(1).and_then(|b| b.weight),
+                strategy = strategy_name,
+                "HTTPRoute updated successfully"
+            );
+            Ok(())
+        }
+        Err(kube::Error::Api(err)) if err.code == 404 => {
+            // HTTPRoute not found - this is non-fatal, traffic routing is optional
+            warn!(
+                rollout = ?rollout_name,
+                httproute = ?httproute_name,
+                "HTTPRoute not found - skipping traffic routing update"
+            );
+            Ok(())
+        }
+        Err(e) => {
+            error!(
+                error = ?e,
+                rollout = ?rollout_name,
+                httproute = ?httproute_name,
+                "Failed to patch HTTPRoute"
+            );
+            Err(StrategyError::TrafficReconciliationFailed(e.to_string()))
+        }
+    }
 }
 
 /// Strategy trait for different rollout types
@@ -200,7 +299,7 @@ mod tests {
     #[test]
     fn test_select_strategy_simple() {
         let rollout = create_test_rollout(RolloutStrategySpec {
-            simple: Some(SimpleStrategy { analysis: None }),
+            simple: Some(SimpleStrategy {}),
             canary: None,
             blue_green: None,
         });

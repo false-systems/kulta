@@ -509,7 +509,7 @@ async fn test_simple_strategy_emits_deployed_and_published() {
             selector: Default::default(),
             template: create_test_pod_template("nginx:2.0"),
             strategy: RolloutStrategy {
-                simple: Some(SimpleStrategy { analysis: None }),
+                simple: Some(SimpleStrategy {}),
                 canary: None,
                 blue_green: None,
             },

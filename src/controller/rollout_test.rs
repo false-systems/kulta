@@ -42,7 +42,7 @@ fn create_test_rollout_with_simple() -> Rollout {
                 }),
             },
             strategy: RolloutStrategy {
-                simple: Some(SimpleStrategy { analysis: None }),
+                simple: Some(SimpleStrategy {}),
                 canary: None,
                 blue_green: None,
             },

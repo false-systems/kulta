@@ -58,12 +58,12 @@ pub struct RolloutStrategy {
 /// Simple deployment strategy
 ///
 /// Standard Kubernetes rolling update with CDEvents observability.
-/// No traffic splitting - just deploy, monitor metrics, and emit events.
-#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+/// No traffic splitting or metrics analysis - just deploy and emit events.
+/// For metrics-based rollback, use canary or blue-green strategy instead.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, JsonSchema)]
 pub struct SimpleStrategy {
-    /// Analysis configuration for automated metrics-based rollback
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub analysis: Option<AnalysisConfig>,
+    // Simple strategy has no configurable fields.
+    // It exists to explicitly select "just deploy" behavior over canary/blue-green.
 }
 
 /// Blue-Green deployment strategy

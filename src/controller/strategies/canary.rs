@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use k8s_openapi::api::apps::v1::ReplicaSet;
 use kube::api::Api;
 use kube::ResourceExt;
-use tracing::{error, info, warn};
+use tracing::info;
 
 /// Canary strategy handler
 ///
@@ -97,107 +97,34 @@ impl RolloutStrategy for CanaryStrategyHandler {
         // Check if canary strategy has traffic routing configured
         let canary_strategy = match &rollout.spec.strategy.canary {
             Some(strategy) => strategy,
-            None => {
-                // No canary strategy defined (shouldn't happen if we're selected)
-                return Ok(());
-            }
+            None => return Ok(()),
         };
 
         let traffic_routing = match &canary_strategy.traffic_routing {
             Some(routing) => routing,
-            None => {
-                // No traffic routing configured - this is OK, traffic routing is optional
-                return Ok(());
-            }
+            None => return Ok(()),
         };
 
         let gateway_api_routing = match &traffic_routing.gateway_api {
             Some(routing) => routing,
-            None => {
-                // No Gateway API routing configured
-                return Ok(());
-            }
+            None => return Ok(()),
         };
 
         let namespace = rollout
             .namespace()
             .ok_or_else(|| StrategyError::MissingField("namespace".to_string()))?;
-        let name = rollout.name_any();
-        let httproute_name = &gateway_api_routing.http_route;
 
-        info!(
-            rollout = ?name,
-            httproute = ?httproute_name,
-            strategy = "canary",
-            "Updating HTTPRoute with weighted backends"
-        );
-
-        // Build the weighted backend refs
         let backend_refs = build_gateway_api_backend_refs(rollout);
 
-        // Create JSON patch to update HTTPRoute's first rule's backendRefs
-        let patch_json = serde_json::json!({
-            "spec": {
-                "rules": [{
-                    "backendRefs": backend_refs
-                }]
-            }
-        });
-
-        // Create HTTPRoute API client using DynamicObject
-        use kube::api::{Api, Patch, PatchParams};
-        use kube::core::DynamicObject;
-        use kube::discovery::ApiResource;
-
-        let ar = ApiResource {
-            group: "gateway.networking.k8s.io".to_string(),
-            version: "v1".to_string(),
-            api_version: "gateway.networking.k8s.io/v1".to_string(),
-            kind: "HTTPRoute".to_string(),
-            plural: "httproutes".to_string(),
-        };
-
-        let httproute_api: Api<DynamicObject> =
-            Api::namespaced_with(ctx.client.clone(), &namespace, &ar);
-
-        // Apply the patch
-        match httproute_api
-            .patch(
-                httproute_name,
-                &PatchParams::default(),
-                &Patch::Merge(&patch_json),
-            )
-            .await
-        {
-            Ok(_) => {
-                info!(
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    stable_weight = backend_refs.first().and_then(|b| b.weight),
-                    canary_weight = backend_refs.get(1).and_then(|b| b.weight),
-                    "HTTPRoute updated successfully (canary)"
-                );
-                Ok(())
-            }
-            Err(kube::Error::Api(err)) if err.code == 404 => {
-                // HTTPRoute not found - this is non-fatal, traffic routing is optional
-                warn!(
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    "HTTPRoute not found - skipping traffic routing update"
-                );
-                Ok(())
-            }
-            Err(e) => {
-                error!(
-                    error = ?e,
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    "Failed to patch HTTPRoute"
-                );
-                Err(StrategyError::TrafficReconciliationFailed(e.to_string()))
-            }
-        }
+        super::patch_httproute_weights(
+            ctx,
+            &namespace,
+            &gateway_api_routing.http_route,
+            backend_refs,
+            &rollout.name_any(),
+            "canary",
+        )
+        .await
     }
 
     fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus {

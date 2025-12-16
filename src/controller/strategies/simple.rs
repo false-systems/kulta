@@ -1,7 +1,7 @@
 //! Simple deployment strategy
 //!
 //! Standard Kubernetes rolling update with CDEvents observability.
-//! No traffic splitting - just deploy, monitor metrics, and emit events.
+//! No traffic splitting or metrics analysis - just deploy and emit events.
 
 use super::{RolloutStrategy, StrategyError};
 use crate::controller::rollout::{build_replicaset_for_simple, ensure_replicaset_exists, Context};
@@ -17,7 +17,7 @@ use tracing::info;
 /// Implements standard rolling update behavior:
 /// - Single ReplicaSet with all replicas
 /// - No traffic routing (direct pod access)
-/// - Optional metrics-based rollback
+/// - No metrics analysis (use canary or blue-green for that)
 /// - Always completes immediately (no steps)
 pub struct SimpleStrategyHandler;
 
@@ -94,9 +94,11 @@ impl RolloutStrategy for SimpleStrategyHandler {
     }
 
     fn supports_metrics_analysis(&self) -> bool {
-        // Simple strategy supports metrics analysis when configured
-        // Reconcile loop will check if analysis config exists before evaluating
-        true
+        // Simple strategy does NOT support metrics analysis.
+        // It goes directly to Completed phase with no Progressing phase,
+        // so there's no opportunity to evaluate metrics and rollback.
+        // Use canary or blue-green strategy for metrics-based rollback.
+        false
     }
 
     fn supports_manual_promotion(&self) -> bool {
@@ -109,32 +111,12 @@ impl RolloutStrategy for SimpleStrategyHandler {
 mod tests {
     use super::*;
     use crate::crd::rollout::{
-        AnalysisConfig, MetricConfig, PrometheusConfig, RolloutSpec,
-        RolloutStrategy as RolloutStrategySpec, SimpleStrategy,
+        RolloutSpec, RolloutStrategy as RolloutStrategySpec, SimpleStrategy,
     };
     use k8s_openapi::api::core::v1::PodTemplateSpec;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 
-    fn create_simple_rollout(replicas: i32, with_analysis: bool) -> Rollout {
-        let analysis = if with_analysis {
-            Some(AnalysisConfig {
-                prometheus: Some(PrometheusConfig {
-                    address: Some("http://prometheus:9090".to_string()),
-                }),
-                failure_policy: None,
-                warmup_duration: None,
-                metrics: vec![MetricConfig {
-                    name: "error-rate".to_string(),
-                    threshold: 5.0,
-                    interval: None,
-                    failure_threshold: None,
-                    min_sample_size: None,
-                }],
-            })
-        } else {
-            None
-        };
-
+    fn create_simple_rollout(replicas: i32) -> Rollout {
         Rollout {
             metadata: kube::api::ObjectMeta {
                 name: Some("test-simple-rollout".to_string()),
@@ -146,7 +128,7 @@ mod tests {
                 selector: LabelSelector::default(),
                 template: PodTemplateSpec::default(),
                 strategy: RolloutStrategySpec {
-                    simple: Some(SimpleStrategy { analysis }),
+                    simple: Some(SimpleStrategy {}),
                     canary: None,
                     blue_green: None,
                 },
@@ -163,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_simple_strategy_compute_next_status() {
-        let rollout = create_simple_rollout(5, false);
+        let rollout = create_simple_rollout(5);
         let strategy = SimpleStrategyHandler;
 
         let status = strategy.compute_next_status(&rollout);
@@ -179,12 +161,12 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_strategy_supports_metrics_analysis() {
+    fn test_simple_strategy_does_not_support_metrics_analysis() {
         let strategy = SimpleStrategyHandler;
 
-        // Simple strategy DOES support metrics analysis
-        // Reconcile loop checks if analysis config exists before evaluating
-        assert!(strategy.supports_metrics_analysis());
+        // Simple strategy does NOT support metrics analysis
+        // It goes directly to Completed phase with no opportunity for metrics evaluation
+        assert!(!strategy.supports_metrics_analysis());
     }
 
     #[test]
@@ -195,7 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_simple_strategy_reconcile_traffic_is_noop() {
-        let rollout = create_simple_rollout(3, false);
+        let rollout = create_simple_rollout(3);
         let ctx = Context::new_mock();
         let strategy = SimpleStrategyHandler;
 

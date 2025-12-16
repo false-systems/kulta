@@ -39,6 +39,9 @@ pub enum ReconcileError {
 
     #[error("Metrics evaluation failed: {0}")]
     MetricsEvaluationFailed(String),
+
+    #[error("Strategy reconciliation failed: {0}")]
+    StrategyError(#[from] crate::controller::strategies::StrategyError),
 }
 
 pub struct Context {
@@ -1069,16 +1072,10 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     info!(rollout = ?name, strategy = strategy.name(), "Selected deployment strategy");
 
     // Reconcile ReplicaSets using strategy-specific logic
-    strategy
-        .reconcile_replicasets(&rollout, &ctx)
-        .await
-        .map_err(|e| ReconcileError::ValidationError(e.to_string()))?;
+    strategy.reconcile_replicasets(&rollout, &ctx).await?;
 
     // Reconcile traffic routing using strategy-specific logic
-    strategy
-        .reconcile_traffic(&rollout, &ctx)
-        .await
-        .map_err(|e| ReconcileError::ValidationError(e.to_string()))?;
+    strategy.reconcile_traffic(&rollout, &ctx).await?;
 
     // Evaluate metrics and trigger rollback if unhealthy (only for strategies that support it)
     if strategy.supports_metrics_analysis() {

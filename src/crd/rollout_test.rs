@@ -79,13 +79,7 @@ spec:
       - name: app
         image: nginx:1.20
   strategy:
-    simple:
-      analysis:
-        prometheus:
-          address: http://prometheus:9090
-        metrics:
-          - name: error-rate
-            threshold: 0.01
+    simple: {}
 "#;
 
     let rollout: Rollout = serde_yaml::from_str(yaml).expect("Failed to deserialize Rollout");
@@ -93,17 +87,10 @@ spec:
     assert_eq!(rollout.metadata.name.as_deref(), Some("simple-rollout"));
     assert_eq!(rollout.spec.replicas, 3);
 
-    // Verify simple strategy is set
+    // Verify simple strategy is set (empty struct - no configurable fields)
     assert!(rollout.spec.strategy.simple.is_some());
     assert!(rollout.spec.strategy.canary.is_none());
-
-    let simple = rollout.spec.strategy.simple.unwrap();
-    assert!(simple.analysis.is_some());
-    let analysis = simple.analysis.unwrap();
-    assert_eq!(
-        analysis.prometheus.unwrap().address.as_deref(),
-        Some("http://prometheus:9090")
-    );
+    assert!(rollout.spec.strategy.blue_green.is_none());
 }
 
 #[test]
