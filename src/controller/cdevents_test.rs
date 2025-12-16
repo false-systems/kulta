@@ -69,9 +69,28 @@ async fn test_emit_service_deployed_on_initialization() {
         "Expected service.deployed event"
     );
 
-    // TODO: Verify event can be converted to CDEvent
-    // let _cdevent: cdevents_sdk::CDEvent = event.clone().try_into().unwrap();
-    // TODO: Verify artifact_id, environment, etc.
+    // Verify event data contains expected CDEvent fields
+    let data = event.data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+
+    // Verify subject contains artifact_id (the container image)
+    let artifact_id = &json["subject"]["content"]["artifactId"];
+    assert_eq!(
+        artifact_id.as_str(),
+        Some("nginx:1.0"),
+        "artifact_id should be the container image"
+    );
+
+    // Verify subject contains environment
+    let environment_id = &json["subject"]["content"]["environment"]["id"];
+    assert_eq!(
+        environment_id.as_str(),
+        Some("default/test-app"),
+        "environment.id should be namespace/name"
+    );
 }
 
 // TDD Cycle 2: RED - Test that service.upgraded event is emitted when canary progresses
@@ -150,9 +169,36 @@ async fn test_emit_service_upgraded_on_step_progression() {
         "Expected service.upgraded event"
     );
 
-    // TODO: Verify event can be converted to CDEvent
-    // let _cdevent: cdevents_sdk::CDEvent = event.clone().try_into().unwrap();
-    // TODO: Verify artifact_id, environment, step metadata
+    // Verify event data contains expected CDEvent fields
+    let data = event.data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+
+    // Verify subject contains artifact_id (the container image)
+    let artifact_id = &json["subject"]["content"]["artifactId"];
+    assert_eq!(
+        artifact_id.as_str(),
+        Some("nginx:2.0"),
+        "artifact_id should be the container image"
+    );
+
+    // Verify subject contains environment
+    let environment_id = &json["subject"]["content"]["environment"]["id"];
+    assert_eq!(
+        environment_id.as_str(),
+        Some("default/test-app"),
+        "environment.id should be namespace/name"
+    );
+
+    // Verify step metadata in customData
+    let kulta = &json["customData"]["kulta"];
+    assert_eq!(kulta["step"]["index"], 1, "step index should be 1");
+    assert_eq!(
+        kulta["step"]["traffic_weight"], 50,
+        "traffic weight should be 50"
+    );
 }
 
 // TDD Cycle 3: RED - Test that service.rolledback event is emitted on failure
@@ -225,9 +271,36 @@ async fn test_emit_service_rolledback_on_failure() {
         "Expected service.rolledback event"
     );
 
-    // TODO: Verify event can be converted to CDEvent
-    // let _cdevent: cdevents_sdk::CDEvent = event.clone().try_into().unwrap();
-    // TODO: Verify artifact_id, environment, failure reason
+    // Verify event data contains expected CDEvent fields
+    let data = event.data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+
+    // Verify subject contains artifact_id (the container image)
+    let artifact_id = &json["subject"]["content"]["artifactId"];
+    assert_eq!(
+        artifact_id.as_str(),
+        Some("nginx:2.0"),
+        "artifact_id should be the container image"
+    );
+
+    // Verify subject contains environment
+    let environment_id = &json["subject"]["content"]["environment"]["id"];
+    assert_eq!(
+        environment_id.as_str(),
+        Some("default/test-app"),
+        "environment.id should be namespace/name"
+    );
+
+    // Verify failure reason in customData
+    let kulta = &json["customData"]["kulta"];
+    assert_eq!(
+        kulta["decision"]["reason"].as_str(),
+        Some("analysis_failed"),
+        "decision reason should indicate analysis failure"
+    );
 }
 
 // TDD Cycle 4: RED - Test that service.published event is emitted on completion
@@ -306,9 +379,28 @@ async fn test_emit_service_published_on_completion() {
         "Expected service.published event"
     );
 
-    // TODO: Verify event can be converted to CDEvent
-    // let _cdevent: cdevents_sdk::CDEvent = event.clone().try_into().unwrap();
-    // TODO: Verify artifact_id, environment
+    // Verify event data contains expected CDEvent fields
+    let data = event.data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+
+    // Verify subject contains environment (service.published doesn't have artifact_id)
+    let environment_id = &json["subject"]["content"]["environment"]["id"];
+    assert_eq!(
+        environment_id.as_str(),
+        Some("default/test-app"),
+        "environment.id should be namespace/name"
+    );
+
+    // Verify completion reason in customData
+    let kulta = &json["customData"]["kulta"];
+    assert_eq!(
+        kulta["decision"]["reason"].as_str(),
+        Some("completed"),
+        "decision reason should indicate completion"
+    );
 }
 
 // TDD: Test that customData contains KULTA decision context

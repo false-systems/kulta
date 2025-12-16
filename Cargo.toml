@@ -40,12 +40,13 @@ uuid = { version = "1", features = ["v4"] }
 # HTTP client for CDEvents emission
 reqwest = { version = "0.12", features = ["json"] }
 
+# Async trait support for strategy pattern
+async-trait = "0.1"
+
 [dev-dependencies]
 serde_yaml = "0.9"
 
 # Integration test dependencies
-async-trait = "0.1"
-reqwest = "0.12"
 toml = "0.8"
 
 # Kubernetes testing framework

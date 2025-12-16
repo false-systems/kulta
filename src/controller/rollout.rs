@@ -125,7 +125,7 @@ pub fn compute_pod_template_hash(template: &PodTemplateSpec) -> Result<String, R
 /// assert_eq!(stable, 1); // 50% of 3 → 1 stable, 2 canary (ceil)
 /// assert_eq!(canary, 2);
 /// ```
-fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32) {
+pub fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32) {
     // Calculate canary replicas (ceiling to ensure at least 1 if weight > 0)
     let canary_replicas = if canary_weight == 0 {
         0
@@ -147,7 +147,7 @@ fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32, i32
 /// - Return Ok if ReplicaSet already exists
 /// - Create ReplicaSet if it doesn't exist (404)
 /// - Return Err on other API errors
-async fn ensure_replicaset_exists(
+pub async fn ensure_replicaset_exists(
     rs_api: &Api<ReplicaSet>,
     rs: &ReplicaSet,
     rs_type: &str,
@@ -442,11 +442,13 @@ pub fn calculate_traffic_weights(rollout: &Rollout) -> (i32, i32) {
         return (0, 100);
     }
 
-    // Get the canary weight from the current step
-    let canary_weight = canary_strategy.steps[current_step_index as usize]
+    // Get the canary weight from the current step (validated to be 0-100)
+    let raw_weight = canary_strategy.steps[current_step_index as usize]
         .set_weight
         .unwrap_or(0);
 
+    // Validation guarantees raw_weight is in 0-100
+    let canary_weight = raw_weight;
     let stable_weight = 100 - canary_weight;
 
     (stable_weight, canary_weight)
@@ -486,11 +488,13 @@ pub fn initialize_rollout_status(rollout: &Rollout) -> crate::crd::rollout::Roll
     // Check for blue-green strategy
     if rollout.spec.strategy.blue_green.is_some() {
         // Blue-green strategy: preview RS ready, awaiting promotion
+        // Set pause_start_time to track when preview started (for auto-promotion timer)
         return RolloutStatus {
             phase: Some(Phase::Preview),
             current_step_index: None,
             current_weight: None,
             message: Some("Blue-green rollout: preview environment ready".to_string()),
+            pause_start_time: Some(Utc::now().to_rfc3339()),
             ..Default::default()
         };
     }
@@ -975,15 +979,25 @@ fn validate_rollout(rollout: &Rollout) -> Result<(), String> {
             return Err("spec.strategy.canary.stableService cannot be empty".to_string());
         }
 
+        // Validate at least one step exists
+        if canary.steps.is_empty() {
+            return Err("spec.strategy.canary.steps must have at least one step".to_string());
+        }
+
         // Validate each step
         for (i, step) in canary.steps.iter().enumerate() {
-            // Validate weight is in 0-100 range
-            if let Some(weight) = step.set_weight {
-                if !(0..=100).contains(&weight) {
-                    return Err(format!(
-                        "steps[{}].setWeight must be 0-100, got {}",
-                        i, weight
-                    ));
+            // Validate setWeight is required and in 0-100 range
+            match step.set_weight {
+                Some(weight) => {
+                    if !(0..=100).contains(&weight) {
+                        return Err(format!(
+                            "steps[{}].setWeight must be 0-100, got {}",
+                            i, weight
+                        ));
+                    }
+                }
+                None => {
+                    return Err(format!("steps[{}].setWeight is required", i));
                 }
             }
 
@@ -1050,253 +1064,32 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         return Err(ReconcileError::ValidationError(validation_error));
     }
 
-    // Create ReplicaSet API client
-    let rs_api: Api<ReplicaSet> = Api::namespaced(ctx.client.clone(), &namespace);
+    // Select strategy handler based on rollout spec
+    let strategy = crate::controller::strategies::select_strategy(&rollout);
+    info!(rollout = ?name, strategy = strategy.name(), "Selected deployment strategy");
 
-    // Handle strategy-specific ReplicaSet management
-    if rollout.spec.strategy.simple.is_some() {
-        // Simple strategy: single ReplicaSet with all replicas
-        let rs = build_replicaset_for_simple(&rollout, rollout.spec.replicas)?;
-        info!(
-            rollout = ?name,
-            strategy = "simple",
-            replicas = rollout.spec.replicas,
-            "Built simple ReplicaSet"
-        );
-        ensure_replicaset_exists(&rs_api, &rs, "simple", rollout.spec.replicas).await?;
-    } else if rollout.spec.strategy.blue_green.is_some() {
-        // Blue-green strategy: active + preview ReplicaSets (both full size)
-        let (active_rs, preview_rs) =
-            build_replicasets_for_blue_green(&rollout, rollout.spec.replicas)?;
+    // Reconcile ReplicaSets using strategy-specific logic
+    strategy
+        .reconcile_replicasets(&rollout, &ctx)
+        .await
+        .map_err(|e| ReconcileError::ValidationError(e.to_string()))?;
 
-        info!(
-            rollout = ?name,
-            strategy = "blue-green",
-            replicas = rollout.spec.replicas,
-            "Built blue-green ReplicaSets"
-        );
+    // Reconcile traffic routing using strategy-specific logic
+    strategy
+        .reconcile_traffic(&rollout, &ctx)
+        .await
+        .map_err(|e| ReconcileError::ValidationError(e.to_string()))?;
 
-        ensure_replicaset_exists(&rs_api, &active_rs, "active", rollout.spec.replicas).await?;
-        ensure_replicaset_exists(&rs_api, &preview_rs, "preview", rollout.spec.replicas).await?;
-    } else {
-        // Canary strategy: stable + canary ReplicaSets with traffic-based scaling
-        let current_weight = rollout
-            .status
-            .as_ref()
-            .and_then(|s| s.current_weight)
-            .unwrap_or(0);
-
-        let (stable_replicas, canary_replicas) =
-            calculate_replica_split(rollout.spec.replicas, current_weight);
-
-        info!(
-            rollout = ?name,
-            strategy = "canary",
-            total_replicas = rollout.spec.replicas,
-            current_weight = current_weight,
-            stable_replicas = stable_replicas,
-            canary_replicas = canary_replicas,
-            "Calculated ReplicaSet scaling"
-        );
-
-        // Build and ensure stable ReplicaSet exists with calculated replicas
-        let stable_rs = build_replicaset(&rollout, "stable", stable_replicas)?;
-        info!(
-            rollout = ?name,
-            rs_type = "stable",
-            spec_replicas = ?stable_rs.spec.as_ref().and_then(|s| s.replicas),
-            "Built stable ReplicaSet"
-        );
-        ensure_replicaset_exists(&rs_api, &stable_rs, "stable", stable_replicas).await?;
-
-        // Build and ensure canary ReplicaSet exists with calculated replicas
-        let canary_rs = build_replicaset(&rollout, "canary", canary_replicas)?;
-        info!(
-            rollout = ?name,
-            rs_type = "canary",
-            spec_replicas = ?canary_rs.spec.as_ref().and_then(|s| s.replicas),
-            "Built canary ReplicaSet"
-        );
-        ensure_replicaset_exists(&rs_api, &canary_rs, "canary", canary_replicas).await?;
-    }
-
-    // Update HTTPRoute with weighted backends (if configured)
-    if let Some(canary_strategy) = &rollout.spec.strategy.canary {
-        if let Some(traffic_routing) = &canary_strategy.traffic_routing {
-            if let Some(gateway_api_routing) = &traffic_routing.gateway_api {
-                let httproute_name = &gateway_api_routing.http_route;
-
-                info!(
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    "Updating HTTPRoute with weighted backends"
-                );
-
-                // Build the weighted backend refs
-                let backend_refs = build_gateway_api_backend_refs(&rollout);
-
-                // Create JSON patch to update HTTPRoute's first rule's backendRefs
-                // NOTE: KULTA assumes the HTTPRoute has exactly one rule for traffic splitting
-                // This Merge patch only updates the backendRefs field of the first rule,
-                // preserving other fields like matches, filters, etc.
-                let patch_json = serde_json::json!({
-                    "spec": {
-                        "rules": [{
-                            "backendRefs": backend_refs
-                        }]
-                    }
-                });
-
-                // Create HTTPRoute API client using DynamicObject
-                use kube::api::{Api, Patch, PatchParams};
-                use kube::core::DynamicObject;
-                use kube::discovery::ApiResource;
-
-                let ar = ApiResource {
-                    group: "gateway.networking.k8s.io".to_string(),
-                    version: "v1".to_string(),
-                    api_version: "gateway.networking.k8s.io/v1".to_string(),
-                    kind: "HTTPRoute".to_string(),
-                    plural: "httproutes".to_string(),
-                };
-
-                let httproute_api: Api<DynamicObject> =
-                    Api::namespaced_with(ctx.client.clone(), &namespace, &ar);
-
-                // Apply the patch (Merge patch doesn't support force)
-                match httproute_api
-                    .patch(
-                        httproute_name,
-                        &PatchParams::default(),
-                        &Patch::Merge(&patch_json),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        info!(
-                            rollout = ?name,
-                            httproute = ?httproute_name,
-                            stable_weight = backend_refs.first().and_then(|b| b.weight),
-                            canary_weight = backend_refs.get(1).and_then(|b| b.weight),
-                            "HTTPRoute updated successfully"
-                        );
-                    }
-                    Err(kube::Error::Api(err)) if err.code == 404 => {
-                        warn!(
-                            rollout = ?name,
-                            httproute = ?httproute_name,
-                            "HTTPRoute not found - skipping traffic routing update"
-                        );
-                        // Don't fail the reconciliation, just skip HTTPRoute update
-                    }
-                    Err(e) => {
-                        error!(
-                            error = ?e,
-                            rollout = ?name,
-                            httproute = ?httproute_name,
-                            "Failed to patch HTTPRoute"
-                        );
-                        return Err(ReconcileError::KubeError(e));
-                    }
-                }
-            }
-        }
-    }
-
-    // Update HTTPRoute with weighted backends for blue-green (if configured)
-    if let Some(blue_green) = &rollout.spec.strategy.blue_green {
-        if let Some(traffic_routing) = &blue_green.traffic_routing {
-            if let Some(gateway_api_routing) = &traffic_routing.gateway_api {
-                let httproute_name = &gateway_api_routing.http_route;
-
-                info!(
-                    rollout = ?name,
-                    httproute = ?httproute_name,
-                    strategy = "blue-green",
-                    "Updating HTTPRoute with weighted backends"
-                );
-
-                // Build the weighted backend refs
-                let backend_refs = build_gateway_api_backend_refs(&rollout);
-
-                let patch_json = serde_json::json!({
-                    "spec": {
-                        "rules": [{
-                            "backendRefs": backend_refs
-                        }]
-                    }
-                });
-
-                use kube::api::{Patch, PatchParams};
-                use kube::core::DynamicObject;
-                use kube::discovery::ApiResource;
-
-                let ar = ApiResource {
-                    group: "gateway.networking.k8s.io".to_string(),
-                    version: "v1".to_string(),
-                    api_version: "gateway.networking.k8s.io/v1".to_string(),
-                    kind: "HTTPRoute".to_string(),
-                    plural: "httproutes".to_string(),
-                };
-
-                let httproute_api: Api<DynamicObject> =
-                    Api::namespaced_with(ctx.client.clone(), &namespace, &ar);
-
-                match httproute_api
-                    .patch(
-                        httproute_name,
-                        &PatchParams::default(),
-                        &Patch::Merge(&patch_json),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        info!(
-                            rollout = ?name,
-                            httproute = ?httproute_name,
-                            active_weight = backend_refs.first().and_then(|b| b.weight),
-                            preview_weight = backend_refs.get(1).and_then(|b| b.weight),
-                            "HTTPRoute updated successfully (blue-green)"
-                        );
-                    }
-                    Err(kube::Error::Api(err)) if err.code == 404 => {
-                        warn!(
-                            rollout = ?name,
-                            httproute = ?httproute_name,
-                            "HTTPRoute not found - skipping traffic routing update"
-                        );
-                    }
-                    Err(e) => {
-                        error!(
-                            error = ?e,
-                            rollout = ?name,
-                            httproute = ?httproute_name,
-                            "Failed to patch HTTPRoute"
-                        );
-                        return Err(ReconcileError::KubeError(e));
-                    }
-                }
-            }
-        }
-    }
-
-    // Evaluate metrics (if analysis config exists and rollout is progressing, and strategy is canary)
-    if let Some(current_status) = &rollout.status {
-        if current_status.phase == Some(Phase::Progressing) {
-            // Only evaluate metrics for canary strategy
-            if rollout.spec.strategy.canary.is_some() {
-                // Check metrics health
+    // Evaluate metrics and trigger rollback if unhealthy (only for strategies that support it)
+    if strategy.supports_metrics_analysis() {
+        if let Some(current_status) = &rollout.status {
+            if current_status.phase == Some(Phase::Progressing) {
                 let is_healthy = evaluate_rollout_metrics(&rollout, &ctx).await?;
 
                 if !is_healthy {
-                    // Metrics unhealthy - trigger rollback
-                    warn!(
-                        rollout = ?name,
-                        "Metrics unhealthy, triggering rollback"
-                    );
+                    warn!(rollout = ?name, "Metrics unhealthy, triggering rollback");
 
-                    // Create failed status
-                    let failed_status = crate::crd::rollout::RolloutStatus {
+                    let failed_status = RolloutStatus {
                         phase: Some(Phase::Failed),
                         message: Some(
                             "Rollback triggered: metrics exceeded thresholds".to_string(),
@@ -1304,7 +1097,7 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                         ..current_status.clone()
                     };
 
-                    // Emit rollback CDEvent
+                    // Emit rollback CDEvent (non-fatal)
                     if let Err(e) = emit_status_change_event(
                         &rollout,
                         &rollout.status,
@@ -1313,37 +1106,30 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                     )
                     .await
                     {
-                        warn!(
-                            error = ?e,
-                            rollout = ?name,
-                            "Failed to emit rollback CDEvent (non-fatal)"
-                        );
+                        warn!(error = ?e, rollout = ?name, "Failed to emit rollback CDEvent (non-fatal)");
                     }
 
-                    // Update status to Failed
-                    use kube::api::{Patch, PatchParams};
+                    // Patch status to Failed
+                    use kube::api::{Api, Patch, PatchParams};
                     let rollout_api: Api<Rollout> = Api::namespaced(ctx.client.clone(), &namespace);
-                    let status_patch = serde_json::json!({
-                        "status": failed_status
-                    });
-
                     rollout_api
-                        .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+                        .patch_status(
+                            &name,
+                            &PatchParams::default(),
+                            &Patch::Merge(&serde_json::json!({
+                                "status": failed_status
+                            })),
+                        )
                         .await?;
 
-                    info!(
-                        rollout = ?name,
-                        "Rollout marked as Failed due to unhealthy metrics"
-                    );
-
-                    // Requeue to monitor if metrics recover
+                    info!(rollout = ?name, "Rollout marked as Failed due to unhealthy metrics");
                     return Ok(Action::requeue(Duration::from_secs(30)));
                 }
             }
         }
     }
 
-    // Check if promote annotation exists BEFORE computing status (to avoid race condition)
+    // Check for promote annotation before computing status (avoid race condition)
     let had_promote_annotation = has_promote_annotation(&rollout);
     let was_paused_before = rollout
         .status
@@ -1351,16 +1137,15 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         .map(|s| s.phase == Some(Phase::Paused))
         .unwrap_or(false);
 
-    // Compute desired status (initialize or progress steps)
-    let desired_status = compute_desired_status(&rollout);
+    // Compute desired status using strategy-specific logic
+    let desired_status = strategy.compute_next_status(&rollout);
 
-    // Determine if we actually progressed due to the annotation
-    // Only remove annotation if: had annotation AND was paused AND now progressing
+    // Determine if we progressed due to the annotation
     let progressed_due_to_annotation = had_promote_annotation
         && was_paused_before
         && rollout.status.as_ref() != Some(&desired_status);
 
-    // Update Rollout status in Kubernetes if it changed
+    // Update Rollout status if it changed
     if rollout.status.as_ref() != Some(&desired_status) {
         info!(
             rollout = ?name,
@@ -1370,7 +1155,7 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
             "Updating Rollout status"
         );
 
-        // Emit CDEvent for status change (non-fatal if it fails)
+        // Emit CDEvent (non-fatal)
         if let Err(e) = emit_status_change_event(
             &rollout,
             &rollout.status,
@@ -1379,86 +1164,59 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         )
         .await
         {
-            warn!(
-                error = ?e,
-                rollout = ?name,
-                "Failed to emit CDEvent (non-fatal, continuing)"
-            );
+            warn!(error = ?e, rollout = ?name, "Failed to emit CDEvent (non-fatal)");
         }
 
-        // Create Rollout API client
+        // Patch status subresource
         use kube::api::{Api, Patch, PatchParams};
         let rollout_api: Api<Rollout> = Api::namespaced(ctx.client.clone(), &namespace);
 
-        // Create status subresource patch
-        let status_patch = serde_json::json!({
-            "status": desired_status
-        });
-
-        // Patch the status subresource
         match rollout_api
-            .patch_status(&name, &PatchParams::default(), &Patch::Merge(&status_patch))
+            .patch_status(
+                &name,
+                &PatchParams::default(),
+                &Patch::Merge(&serde_json::json!({
+                    "status": desired_status
+                })),
+            )
             .await
         {
             Ok(_) => {
-                info!(
-                    rollout = ?name,
-                    "Status updated successfully"
-                );
+                info!(rollout = ?name, "Status updated successfully");
 
-                // Remove promote annotation only if it was actually used for progression
+                // Remove promote annotation if it was used for progression
                 if progressed_due_to_annotation {
-                    info!(
-                        rollout = ?name,
-                        "Removing promote annotation after successful promotion"
-                    );
-
-                    // Create patch to remove the annotation
-                    let remove_annotation_patch = serde_json::json!({
-                        "metadata": {
-                            "annotations": {
-                                "kulta.io/promote": serde_json::Value::Null
-                            }
-                        }
-                    });
+                    info!(rollout = ?name, "Removing promote annotation after successful promotion");
 
                     match rollout_api
                         .patch(
                             &name,
                             &PatchParams::default(),
-                            &Patch::Merge(&remove_annotation_patch),
+                            &Patch::Merge(&serde_json::json!({
+                                "metadata": {
+                                    "annotations": {
+                                        "kulta.io/promote": serde_json::Value::Null
+                                    }
+                                }
+                            })),
                         )
                         .await
                     {
-                        Ok(_) => {
-                            info!(
-                                rollout = ?name,
-                                "Promote annotation removed successfully"
-                            );
-                        }
+                        Ok(_) => info!(rollout = ?name, "Promote annotation removed successfully"),
                         Err(e) => {
-                            warn!(
-                                error = ?e,
-                                rollout = ?name,
-                                "Failed to remove promote annotation (non-fatal)"
-                            );
-                            // Don't fail reconciliation if annotation removal fails
+                            warn!(error = ?e, rollout = ?name, "Failed to remove promote annotation (non-fatal)")
                         }
                     }
                 }
             }
             Err(e) => {
-                error!(
-                    error = ?e,
-                    rollout = ?name,
-                    "Failed to update status"
-                );
+                error!(error = ?e, rollout = ?name, "Failed to update status");
                 return Err(ReconcileError::KubeError(e));
             }
         }
     }
 
-    // Calculate optimal requeue interval based on pause state
+    // Calculate requeue interval and return
     let requeue_interval = calculate_requeue_interval_from_rollout(&rollout, &desired_status);
     Ok(Action::requeue(requeue_interval))
 }
@@ -1668,7 +1426,7 @@ pub fn parse_duration(duration_str: &str) -> Option<Duration> {
 ///
 /// # Returns
 /// true if annotation exists with value "true", false otherwise
-fn has_promote_annotation(rollout: &Rollout) -> bool {
+pub fn has_promote_annotation(rollout: &Rollout) -> bool {
     rollout
         .metadata
         .annotations
