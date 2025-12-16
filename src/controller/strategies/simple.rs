@@ -86,17 +86,19 @@ impl RolloutStrategy for SimpleStrategyHandler {
                 rollout.spec.replicas
             )),
             replicas: rollout.spec.replicas,
-            ready_replicas: 0,   // Will be updated by status computation
-            updated_replicas: 0, // Will be updated by status computation
+            ready_replicas: 0,
+            updated_replicas: 0,
             pause_start_time: None,
             decisions: vec![],
         }
     }
 
     fn supports_metrics_analysis(&self) -> bool {
-        // Simple strategy supports metrics analysis when configured
-        // Reconcile loop will check if analysis config exists before evaluating
-        true
+        // Simple strategy doesn't support metrics analysis because:
+        // 1. It always completes immediately (no Progressing phase)
+        // 2. Metrics are only evaluated during Progressing phase
+        // Note: Even if analysis config exists in spec, it won't be used
+        false
     }
 
     fn supports_manual_promotion(&self) -> bool {
@@ -179,12 +181,12 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_strategy_supports_metrics_analysis() {
+    fn test_simple_strategy_does_not_support_metrics_analysis() {
         let strategy = SimpleStrategyHandler;
 
-        // Simple strategy DOES support metrics analysis
-        // Reconcile loop checks if analysis config exists before evaluating
-        assert!(strategy.supports_metrics_analysis());
+        // Simple strategy returns false for metrics analysis
+        // Actual metrics check happens in reconcile() if analysis config exists
+        assert!(!strategy.supports_metrics_analysis());
     }
 
     #[test]
