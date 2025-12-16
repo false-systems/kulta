@@ -133,9 +133,7 @@ pub trait RolloutStrategy: Send + Sync {
     /// # Returns
     /// * `true` - Strategy respects kulta.io/promote annotation
     /// * `false` - Strategy doesn't support manual promotion
-    fn supports_manual_promotion(&self) -> bool {
-        false // Default: no manual promotion
-    }
+    fn supports_manual_promotion(&self) -> bool;
 }
 
 /// Select the appropriate strategy handler based on Rollout spec
