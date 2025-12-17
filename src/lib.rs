@@ -4,6 +4,7 @@
 
 pub mod controller;
 pub mod crd;
+pub mod server;
 
 // Re-export for main.rs tests
 pub use crate::controller::{reconcile, Context, ReconcileError};
