@@ -6,7 +6,7 @@ use kulta::controller::cdevents::CDEventsSink;
 use kulta::controller::prometheus::PrometheusClient;
 use kulta::controller::{reconcile, Context, ReconcileError};
 use kulta::crd::rollout::Rollout;
-use kulta::server::{run_health_server, ReadinessState};
+use kulta::server::{run_health_server, wait_for_signal, ReadinessState};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start health server in background
     let health_readiness = readiness.clone();
-    tokio::spawn(async move {
+    let health_handle = tokio::spawn(async move {
         if let Err(e) = run_health_server(HEALTH_PORT, health_readiness).await {
             error!(error = %e, "Health server failed");
         }
@@ -90,17 +90,31 @@ async fn main() -> anyhow::Result<()> {
     readiness.set_ready();
     info!("Controller ready, starting reconciliation loop");
 
-    // Run the controller
-    Controller::new(rollouts, watcher::Config::default())
+    // Create the controller stream
+    let controller = Controller::new(rollouts, watcher::Config::default())
         .run(reconcile, error_policy, ctx)
         .for_each(|res| async move {
             match res {
                 Ok(o) => info!("Reconciled: {:?}", o),
                 Err(e) => warn!("Reconcile failed: {:?}", e),
             }
-        })
-        .await;
+        });
 
+    // Run controller until shutdown signal received
+    tokio::select! {
+        _ = controller => {
+            info!("Controller stream ended");
+        }
+        signal = wait_for_signal() => {
+            info!(signal = signal, "Initiating graceful shutdown");
+        }
+    }
+
+    // Graceful shutdown sequence
+    info!("Stopping health server...");
+    health_handle.abort();
+
+    info!("KULTA controller shut down gracefully");
     Ok(())
 }
 
