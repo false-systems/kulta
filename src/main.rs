@@ -42,10 +42,10 @@ async fn main() -> anyhow::Result<()> {
     let health_readiness = readiness.clone();
     tokio::spawn(async move {
         if let Err(e) = run_health_server(HEALTH_PORT, health_readiness).await {
-            error!(error = %e, "Health server failed");
+            warn!(error = %e, "Health server failed");
         }
     });
-    info!(port = HEALTH_PORT, "Health server started");
+    info!(port = HEALTH_PORT, "Health server task spawned");
 
     // Create Kubernetes client
     let client = match Client::try_default().await {
