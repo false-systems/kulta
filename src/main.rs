@@ -52,6 +52,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "Failed to create Kubernetes client");
+            // Abort health server to avoid leaving it running orphaned
+            health_handle.abort();
             return Err(e.into());
         }
     };
@@ -107,12 +109,16 @@ async fn main() -> anyhow::Result<()> {
         }
         signal = wait_for_signal() => {
             info!(signal = signal, "Initiating graceful shutdown");
+            // Mark not ready so K8s stops sending traffic during shutdown
+            readiness.set_not_ready();
         }
     }
 
     // Graceful shutdown sequence
     info!("Stopping health server...");
     health_handle.abort();
+    // Wait for health server task to complete
+    let _ = health_handle.await;
 
     info!("KULTA controller shut down gracefully");
     Ok(())

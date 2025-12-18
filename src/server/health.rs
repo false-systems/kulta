@@ -31,6 +31,14 @@ impl ReadinessState {
         self.ready.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Mark the controller as not ready (e.g., during shutdown)
+    ///
+    /// This causes the readiness probe to return 503, signaling to
+    /// Kubernetes that the pod should no longer receive traffic.
+    pub fn set_not_ready(&self) {
+        self.ready.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Check if the controller is ready
     pub fn is_ready(&self) -> bool {
         self.ready.load(std::sync::atomic::Ordering::SeqCst)

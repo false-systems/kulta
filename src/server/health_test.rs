@@ -31,7 +31,7 @@ async fn wait_for_server(port: u16, max_retries: u32) -> reqwest::Client {
     client
 }
 
-/// TDD RED: Test that health server starts and /healthz returns 200
+/// Test that health server starts and /healthz returns 200
 #[tokio::test]
 async fn test_healthz_returns_200() {
     // ARRANGE: Create readiness state and start server
@@ -61,7 +61,7 @@ async fn test_healthz_returns_200() {
     server_handle.abort();
 }
 
-/// TDD RED: Test that /readyz returns 503 when not ready
+/// Test that /readyz returns 503 when not ready
 #[tokio::test]
 async fn test_readyz_returns_503_when_not_ready() {
     // ARRANGE: Create readiness state (NOT ready by default)
@@ -96,7 +96,7 @@ async fn test_readyz_returns_503_when_not_ready() {
     server_handle.abort();
 }
 
-/// TDD RED: Test that /readyz returns 200 when ready
+/// Test that /readyz returns 200 when ready
 #[tokio::test]
 async fn test_readyz_returns_200_when_ready() {
     // ARRANGE: Create readiness state and mark as ready

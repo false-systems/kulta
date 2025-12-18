@@ -1,9 +1,15 @@
-//! Graceful shutdown handling for KULTA controller
+//! Graceful shutdown coordination for the KULTA controller
 //!
-//! Handles SIGTERM and SIGINT signals for clean shutdown:
-//! - Stops accepting new reconciliations
-//! - Waits for in-flight work to complete
-//! - Cleans up resources
+//! This module:
+//! - Listens for SIGTERM and SIGINT (or Ctrl+C on non-Unix platforms)
+//! - Broadcasts a shutdown signal to interested components
+//!
+//! Components that receive the [`ShutdownSignal`] are responsible for:
+//! - Stopping acceptance of new work
+//! - Performing any necessary resource cleanup
+//!
+//! Note: Advanced graceful draining (e.g., waiting for in-flight reconciliations)
+//! may be added as a future enhancement.
 
 use tokio::sync::watch;
 use tracing::info;
