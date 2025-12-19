@@ -236,3 +236,29 @@ fn test_status_decisions_serialization() {
     assert_eq!(parsed.decisions.len(), 1);
     assert_eq!(parsed.decisions[0].action, DecisionAction::StepAdvance);
 }
+
+/// Ensures the generated CRD schema stays in sync with deploy/crd.yaml
+///
+/// This test catches drift between Rust types and deployed CRD.
+/// If this fails, regenerate the CRD with:
+///   cargo run --bin gen-crd | python3 -c "import sys,json,yaml; print(yaml.dump(json.load(sys.stdin), default_flow_style=False, sort_keys=False))" > deploy/crd.yaml
+#[test]
+fn test_crd_matches_deployed_yaml() {
+    // Generate CRD from Rust types
+    let generated_crd = Rollout::crd();
+    let generated_json = serde_json::to_value(&generated_crd).expect("serialize generated CRD");
+
+    // Load deployed CRD
+    let deployed_yaml = include_str!("../../deploy/crd.yaml");
+    let deployed_crd: serde_json::Value =
+        serde_yaml::from_str(deployed_yaml).expect("parse deployed CRD");
+
+    // Compare - if this fails, run gen-crd to regenerate
+    assert_eq!(
+        generated_json, deployed_crd,
+        "Generated CRD doesn't match deploy/crd.yaml. Regenerate with: \
+         cargo run --bin gen-crd | python3 -c \"import sys,json,yaml; \
+         print(yaml.dump(json.load(sys.stdin), default_flow_style=False, sort_keys=False))\" \
+         > deploy/crd.yaml"
+    );
+}
