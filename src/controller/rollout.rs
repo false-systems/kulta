@@ -16,7 +16,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[derive(Debug, Error)]
 pub enum ReconcileError {
@@ -115,6 +115,22 @@ impl Context {
             cdevents_sink: Arc::new(crate::controller::cdevents::CDEventsSink::new_mock()),
             prometheus_client: Arc::new(PrometheusClient::new_mock()),
             leader_state: None,
+        }
+    }
+
+    /// Create a mock Context with leader election enabled
+    ///
+    /// Use this instead of direct struct initialization to avoid
+    /// maintenance burden when Context fields change.
+    #[cfg(test)]
+    #[allow(clippy::unwrap_used)] // Test helper - panicking is acceptable
+    pub fn new_mock_with_leader(leader_state: LeaderState) -> Self {
+        let mock = Self::new_mock();
+        Context {
+            client: mock.client,
+            cdevents_sink: mock.cdevents_sink,
+            prometheus_client: mock.prometheus_client,
+            leader_state: Some(leader_state),
         }
     }
 }
@@ -1085,6 +1101,7 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     // Check if we should reconcile (leader election)
     if !ctx.should_reconcile() {
         // Not the leader - skip reconciliation, requeue later to check again
+        debug!(rollout = ?rollout.name_any(), "Skipping reconciliation - not leader");
         return Ok(Action::requeue(Duration::from_secs(5)));
     }
 

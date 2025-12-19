@@ -145,6 +145,12 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Mark as ready - controller is initialized and about to start
+    //
+    // Note: Readiness indicates "controller is healthy and initialized", NOT "is the active leader".
+    // All replicas report ready even if leader election is enabled. This is intentional because:
+    // 1. Non-leaders may become leaders at any time if the current leader fails
+    // 2. The controller gracefully skips reconciliation when not leader (no errors)
+    // 3. Kubernetes services/traffic should route to all healthy replicas for HA
     readiness.set_ready();
     info!("Controller ready, starting reconciliation loop");
 

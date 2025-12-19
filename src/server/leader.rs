@@ -94,9 +94,28 @@ impl Default for LeaderState {
     }
 }
 
+/// Check if a lease is expired based on renew time and duration
+///
+/// Pure function that can be unit tested independently.
+pub(crate) fn is_lease_expired(
+    renew_time: Option<&MicroTime>,
+    lease_duration: Option<i32>,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    match (renew_time, lease_duration) {
+        (Some(MicroTime(renew)), Some(duration)) => {
+            let expiry = *renew + chrono::Duration::seconds(duration as i64);
+            now > expiry
+        }
+        // No renew time or duration = expired (treat as stale)
+        _ => true,
+    }
+}
+
 /// Try to acquire or renew leadership
 ///
 /// Returns true if we are now the leader, false otherwise.
+/// Uses optimistic locking (resourceVersion) to prevent race conditions.
 async fn try_acquire_or_renew(
     api: &Api<Lease>,
     config: &LeaderConfig,
@@ -112,40 +131,52 @@ async fn try_acquire_or_renew(
             let renew_time = spec.and_then(|s| s.renew_time.as_ref());
             let lease_duration = spec.and_then(|s| s.lease_duration_seconds);
 
+            // Capture resourceVersion for optimistic locking
+            let resource_version = existing.metadata.resource_version.clone();
+
             // Check if we already hold the lease
             if current_holder == Some(&config.holder_id) {
                 // We hold it, renew
                 debug!(holder_id = %config.holder_id, "Renewing lease");
                 let patch = serde_json::json!({
+                    "metadata": {
+                        "resourceVersion": resource_version
+                    },
                     "spec": {
                         "renewTime": now_micro,
                         "leaseDurationSeconds": config.lease_duration_seconds
                     }
                 });
-                api.patch(
-                    &config.lease_name,
-                    &PatchParams::default(),
-                    &Patch::Merge(&patch),
-                )
-                .await?;
-                return Ok(true);
+                match api
+                    .patch(
+                        &config.lease_name,
+                        &PatchParams::default(),
+                        &Patch::Merge(&patch),
+                    )
+                    .await
+                {
+                    Ok(_) => return Ok(true),
+                    Err(kube::Error::Api(e)) if e.code == 409 => {
+                        // Conflict - lease was modified, retry on next interval
+                        debug!(holder_id = %config.holder_id, "Conflict renewing lease, will retry");
+                        return Ok(false);
+                    }
+                    Err(e) => return Err(e),
+                }
             }
 
             // Check if lease is expired
-            let is_expired = match (renew_time, lease_duration) {
-                (Some(MicroTime(renew)), Some(duration)) => {
-                    let expiry = *renew + chrono::Duration::seconds(duration as i64);
-                    now > expiry
-                }
-                _ => true, // No renew time or duration = expired
-            };
+            let is_expired = is_lease_expired(renew_time, lease_duration, now);
 
             if is_expired {
-                // Lease expired, try to acquire
+                // Lease expired, try to acquire with optimistic locking
                 debug!(holder_id = %config.holder_id, "Lease expired, attempting to acquire");
                 let transitions = spec.and_then(|s| s.lease_transitions).unwrap_or(0);
 
                 let patch = serde_json::json!({
+                    "metadata": {
+                        "resourceVersion": resource_version
+                    },
                     "spec": {
                         "holderIdentity": config.holder_id,
                         "acquireTime": now_micro,
@@ -155,13 +186,25 @@ async fn try_acquire_or_renew(
                     }
                 });
 
-                api.patch(
-                    &config.lease_name,
-                    &PatchParams::default(),
-                    &Patch::Merge(&patch),
-                )
-                .await?;
-                return Ok(true);
+                match api
+                    .patch(
+                        &config.lease_name,
+                        &PatchParams::default(),
+                        &Patch::Merge(&patch),
+                    )
+                    .await
+                {
+                    Ok(_) => return Ok(true),
+                    Err(kube::Error::Api(e)) if e.code == 409 => {
+                        // Conflict - another replica acquired the lease first
+                        info!(
+                            holder_id = %config.holder_id,
+                            "Conflict acquiring expired lease - another replica won"
+                        );
+                        return Ok(false);
+                    }
+                    Err(e) => return Err(e),
+                }
             }
 
             // Lease held by someone else and not expired

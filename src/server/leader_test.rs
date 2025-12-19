@@ -1,6 +1,8 @@
 //! Tests for leader election
 
 use super::leader::*;
+use chrono::Utc;
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
 use std::time::Duration;
 
 /// Test LeaderState initial value
@@ -88,4 +90,90 @@ fn test_lease_timing_constants() {
     // Renew interval should be roughly 1/3 of TTL
     assert!(DEFAULT_RENEW_INTERVAL < DEFAULT_LEASE_TTL);
     assert!(DEFAULT_RENEW_INTERVAL >= Duration::from_secs(3));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lease expiry calculation tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Test lease is not expired when within TTL
+#[test]
+fn test_lease_not_expired_within_ttl() {
+    let now = Utc::now();
+    let renew_time = MicroTime(now - chrono::Duration::seconds(5));
+    let lease_duration = 15; // 15 seconds TTL
+
+    let expired = is_lease_expired(Some(&renew_time), Some(lease_duration), now);
+    assert!(!expired, "Lease should not be expired 5s into 15s TTL");
+}
+
+/// Test lease is expired when past TTL
+#[test]
+fn test_lease_expired_past_ttl() {
+    let now = Utc::now();
+    let renew_time = MicroTime(now - chrono::Duration::seconds(20));
+    let lease_duration = 15; // 15 seconds TTL
+
+    let expired = is_lease_expired(Some(&renew_time), Some(lease_duration), now);
+    assert!(expired, "Lease should be expired 20s into 15s TTL");
+}
+
+/// Test lease is expired exactly at boundary
+#[test]
+fn test_lease_expired_at_boundary() {
+    let now = Utc::now();
+    let renew_time = MicroTime(now - chrono::Duration::seconds(15));
+    let lease_duration = 15; // Exactly at expiry
+
+    let expired = is_lease_expired(Some(&renew_time), Some(lease_duration), now);
+    // At exactly the boundary, now > expiry is false (now == expiry)
+    assert!(!expired, "Lease should not be expired at exact boundary");
+}
+
+/// Test lease is expired when just past boundary
+#[test]
+fn test_lease_expired_just_past_boundary() {
+    let now = Utc::now();
+    let renew_time = MicroTime(now - chrono::Duration::seconds(16));
+    let lease_duration = 15; // 1 second past expiry
+
+    let expired = is_lease_expired(Some(&renew_time), Some(lease_duration), now);
+    assert!(expired, "Lease should be expired 1s past boundary");
+}
+
+/// Test lease with no renew time is treated as expired
+#[test]
+fn test_lease_expired_no_renew_time() {
+    let now = Utc::now();
+
+    let expired = is_lease_expired(None, Some(15), now);
+    assert!(
+        expired,
+        "Lease with no renew time should be treated as expired"
+    );
+}
+
+/// Test lease with no duration is treated as expired
+#[test]
+fn test_lease_expired_no_duration() {
+    let now = Utc::now();
+    let renew_time = MicroTime(now);
+
+    let expired = is_lease_expired(Some(&renew_time), None, now);
+    assert!(
+        expired,
+        "Lease with no duration should be treated as expired"
+    );
+}
+
+/// Test lease with neither field is treated as expired
+#[test]
+fn test_lease_expired_neither_field() {
+    let now = Utc::now();
+
+    let expired = is_lease_expired(None, None, now);
+    assert!(
+        expired,
+        "Lease with neither renew time nor duration should be expired"
+    );
 }
