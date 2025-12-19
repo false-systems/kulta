@@ -47,7 +47,7 @@ fn test_leader_state_clones_share_state() {
 /// in parallel test execution. The from_env() function is simple enough
 /// that code review suffices.
 #[test]
-fn test_leader_config_defaults() {
+fn test_leader_config_constants() {
     // Test that default constants are set correctly
     let config = LeaderConfig {
         holder_id: "test-holder".to_string(),
