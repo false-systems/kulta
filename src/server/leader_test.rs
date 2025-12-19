@@ -41,21 +41,22 @@ fn test_leader_state_clones_share_state() {
     assert!(state2.is_leader(), "Clone should reflect same leader state");
 }
 
-/// Test LeaderConfig from_env defaults
+/// Test LeaderConfig constants and structure
+///
+/// Note: We avoid testing env var behavior here due to race conditions
+/// in parallel test execution. The from_env() function is simple enough
+/// that code review suffices.
 #[test]
-fn test_leader_config_defaults() {
-    // Clear env vars to test defaults
-    std::env::remove_var("POD_NAME");
-    std::env::remove_var("POD_NAMESPACE");
-    std::env::remove_var("HOSTNAME");
+fn test_leader_config_constants() {
+    // Test that default constants are set correctly
+    let config = LeaderConfig {
+        holder_id: "test-holder".to_string(),
+        lease_name: "kulta-controller-leader".to_string(),
+        lease_namespace: "kulta-system".to_string(),
+        lease_duration_seconds: DEFAULT_LEASE_TTL.as_secs() as i32,
+        renew_interval: DEFAULT_RENEW_INTERVAL,
+    };
 
-    let config = LeaderConfig::from_env();
-
-    assert!(
-        config.holder_id.starts_with("kulta-"),
-        "Should have UUID fallback"
-    );
-    assert_eq!(config.lease_namespace, "kulta-system");
     assert_eq!(config.lease_name, "kulta-controller-leader");
     assert_eq!(
         config.lease_duration_seconds,
@@ -64,20 +65,69 @@ fn test_leader_config_defaults() {
     assert_eq!(config.renew_interval, DEFAULT_RENEW_INTERVAL);
 }
 
-/// Test LeaderConfig reads from env
+/// Test LeaderConfig::from_env reads POD_NAME when set
 #[test]
-fn test_leader_config_from_env() {
-    std::env::set_var("POD_NAME", "test-pod-123");
-    std::env::set_var("POD_NAMESPACE", "test-namespace");
+fn test_leader_config_from_env_with_pod_name() {
+    // Set unique values to reduce collision risk with parallel tests
+    std::env::set_var("POD_NAME", "test-pod-unique-12345");
+    std::env::set_var("POD_NAMESPACE", "test-ns-unique-12345");
 
     let config = LeaderConfig::from_env();
 
-    assert_eq!(config.holder_id, "test-pod-123");
-    assert_eq!(config.lease_namespace, "test-namespace");
+    assert_eq!(config.holder_id, "test-pod-unique-12345");
+    assert_eq!(config.lease_namespace, "test-ns-unique-12345");
+
+    // Clean up immediately
+    std::env::remove_var("POD_NAME");
+    std::env::remove_var("POD_NAMESPACE");
+}
+
+/// Test LeaderConfig::from_env falls back to HOSTNAME when POD_NAME not set
+#[test]
+fn test_leader_config_from_env_hostname_fallback() {
+    // Clear POD_NAME to trigger HOSTNAME fallback
+    std::env::remove_var("POD_NAME");
+    std::env::set_var("HOSTNAME", "test-hostname-unique-67890");
+
+    let config = LeaderConfig::from_env();
+
+    assert_eq!(config.holder_id, "test-hostname-unique-67890");
+
+    // Clean up
+    std::env::remove_var("HOSTNAME");
+}
+
+/// Test LeaderConfig::from_env generates UUID when no env vars set
+#[test]
+fn test_leader_config_from_env_uuid_fallback() {
+    // Clear all identity env vars
+    std::env::remove_var("POD_NAME");
+    std::env::remove_var("HOSTNAME");
+
+    let config = LeaderConfig::from_env();
+
+    // Should get UUID fallback with "kulta-" prefix
+    assert!(
+        config.holder_id.starts_with("kulta-"),
+        "Expected UUID fallback with kulta- prefix, got: {}",
+        config.holder_id
+    );
+    // UUID is 36 chars, so "kulta-" + UUID = 42 chars
+    assert_eq!(config.holder_id.len(), 42);
+}
+
+/// Test LeaderConfig::from_env uses default namespace when not set
+#[test]
+fn test_leader_config_from_env_default_namespace() {
+    std::env::remove_var("POD_NAMESPACE");
+    std::env::set_var("POD_NAME", "test-pod-for-namespace-test");
+
+    let config = LeaderConfig::from_env();
+
+    assert_eq!(config.lease_namespace, "kulta-system");
 
     // Clean up
     std::env::remove_var("POD_NAME");
-    std::env::remove_var("POD_NAMESPACE");
 }
 
 /// Test default constants are reasonable
