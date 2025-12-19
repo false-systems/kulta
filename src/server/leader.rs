@@ -219,6 +219,9 @@ pub async fn run_leader_election(
         "Starting leader election"
     );
 
+    // Note: tokio::time::interval fires its first tick immediately.
+    // This is intentional so we try to acquire/renew leadership right away
+    // on startup; config.renew_interval applies to subsequent renewals.
     let mut renew_interval = tokio::time::interval(config.renew_interval);
 
     loop {
