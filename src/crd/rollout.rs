@@ -343,6 +343,11 @@ pub struct RolloutStatus {
     #[serde(rename = "pauseStartTime", skip_serializing_if = "Option::is_none")]
     pub pause_start_time: Option<String>,
 
+    /// Timestamp when current step started (RFC3339 format)
+    /// Used for warmup duration tracking before metrics analysis begins
+    #[serde(rename = "stepStartTime", skip_serializing_if = "Option::is_none")]
+    pub step_start_time: Option<String>,
+
     /// Decision history for observability
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<Decision>,

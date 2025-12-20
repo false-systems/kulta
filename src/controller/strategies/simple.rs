@@ -89,6 +89,7 @@ impl RolloutStrategy for SimpleStrategyHandler {
             ready_replicas: 0,
             updated_replicas: 0,
             pause_start_time: None,
+            step_start_time: None,
             decisions: vec![],
         }
     }

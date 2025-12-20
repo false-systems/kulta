@@ -168,6 +168,7 @@ mod tests {
                 updated_replicas: 0,
                 message: None,
                 pause_start_time: None,
+                step_start_time: None,
                 decisions: vec![],
             }),
         }
