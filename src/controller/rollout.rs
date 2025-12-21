@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::PodTemplateSpec;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, ObjectMeta, PostParams};
 use kube::runtime::controller::Action;
-use kube::ResourceExt;
+use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::hash_map::DefaultHasher;
@@ -52,6 +52,9 @@ pub struct Context {
     /// Optional leader state for multi-replica deployments
     /// When Some, reconciliation is skipped if not the leader
     pub leader_state: Option<LeaderState>,
+    /// Optional controller metrics for Prometheus
+    /// When Some, records reconciliation counts and durations
+    pub metrics: Option<crate::server::SharedMetrics>,
 }
 
 impl Context {
@@ -60,12 +63,14 @@ impl Context {
         client: kube::Client,
         cdevents_sink: crate::controller::cdevents::CDEventsSink,
         prometheus_client: PrometheusClient,
+        metrics: Option<crate::server::SharedMetrics>,
     ) -> Self {
         Context {
             client,
             cdevents_sink: Arc::new(cdevents_sink),
             prometheus_client: Arc::new(prometheus_client),
             leader_state: None,
+            metrics,
         }
     }
 
@@ -78,12 +83,14 @@ impl Context {
         cdevents_sink: crate::controller::cdevents::CDEventsSink,
         prometheus_client: PrometheusClient,
         leader_state: LeaderState,
+        metrics: Option<crate::server::SharedMetrics>,
     ) -> Self {
         Context {
             client,
             cdevents_sink: Arc::new(cdevents_sink),
             prometheus_client: Arc::new(prometheus_client),
             leader_state: Some(leader_state),
+            metrics,
         }
     }
 
@@ -115,6 +122,7 @@ impl Context {
             cdevents_sink: Arc::new(crate::controller::cdevents::CDEventsSink::new_mock()),
             prometheus_client: Arc::new(PrometheusClient::new_mock()),
             leader_state: None,
+            metrics: None,
         }
     }
 
@@ -131,6 +139,7 @@ impl Context {
             cdevents_sink: mock.cdevents_sink,
             prometheus_client: mock.prometheus_client,
             leader_state: Some(leader_state),
+            metrics: None,
         }
     }
 }
@@ -1102,8 +1111,17 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
     if !ctx.should_reconcile() {
         // Not the leader - skip reconciliation, requeue later to check again
         debug!(rollout = ?rollout.name_any(), "Skipping reconciliation - not leader");
+
+        // Record skipped metric
+        if let Some(ref metrics) = ctx.metrics {
+            metrics.record_reconciliation_skipped();
+        }
+
         return Ok(Action::requeue(Duration::from_secs(5)));
     }
+
+    // Start timing for metrics
+    let start_time = std::time::Instant::now();
 
     // Validate rollout has required fields
     let namespace = rollout
@@ -1275,6 +1293,18 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
 
     // Calculate requeue interval and return
     let requeue_interval = calculate_requeue_interval_from_rollout(&rollout, &desired_status);
+
+    // Record success metrics
+    if let Some(ref metrics) = ctx.metrics {
+        let duration_secs = start_time.elapsed().as_secs_f64();
+        metrics.record_reconciliation_success(strategy.name(), duration_secs);
+
+        // Update traffic weight gauge
+        if let Some(weight) = desired_status.current_weight {
+            metrics.set_traffic_weight(&namespace, &name, weight as i64);
+        }
+    }
+
     Ok(Action::requeue(requeue_interval))
 }
 
@@ -1320,13 +1350,7 @@ async fn evaluate_rollout_metrics(
                 .and_then(|s| s.step_start_time.as_ref())
                 .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
                 .map(|dt| dt.with_timezone(&Utc))
-                .or_else(|| {
-                    rollout
-                        .meta()
-                        .creation_timestamp
-                        .as_ref()
-                        .map(|t| t.0)
-                });
+                .or_else(|| rollout.meta().creation_timestamp.as_ref().map(|t| t.0));
 
             if let Some(start_time) = step_start_time {
                 let now = Utc::now();
