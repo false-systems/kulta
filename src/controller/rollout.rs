@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::PodTemplateSpec;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector;
 use kube::api::{Api, ObjectMeta, PostParams};
 use kube::runtime::controller::Action;
-use kube::ResourceExt;
+use kube::{Resource, ResourceExt};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::collections::hash_map::DefaultHasher;
