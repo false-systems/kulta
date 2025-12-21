@@ -1310,6 +1310,51 @@ async fn evaluate_rollout_metrics(
         }
     };
 
+    // Check if warmup period has elapsed
+    if let Some(warmup_str) = &analysis_config.warmup_duration {
+        if let Some(warmup_duration) = parse_duration(warmup_str) {
+            // Get step start time from status, or fall back to rollout creation time
+            let step_start_time = rollout
+                .status
+                .as_ref()
+                .and_then(|s| s.step_start_time.as_ref())
+                .and_then(|ts| DateTime::parse_from_rfc3339(ts).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+                .or_else(|| {
+                    rollout
+                        .meta()
+                        .creation_timestamp
+                        .as_ref()
+                        .map(|t| t.0)
+                });
+
+            if let Some(start_time) = step_start_time {
+                let now = Utc::now();
+                let elapsed = now.signed_duration_since(start_time);
+                let warmup_duration_secs = warmup_duration.as_secs() as i64;
+
+                if elapsed.num_seconds() < warmup_duration_secs {
+                    // Still in warmup period - skip analysis, consider healthy
+                    let remaining = warmup_duration_secs - elapsed.num_seconds();
+                    debug!(
+                        rollout = rollout.name_any(),
+                        warmup_remaining_secs = remaining,
+                        "Skipping metrics analysis - warmup period not elapsed"
+                    );
+                    return Ok(true);
+                }
+            } else {
+                // Warmup is configured but step_start_time is missing or invalid.
+                // Treat this as if warmup just started: skip analysis for now.
+                warn!(
+                    rollout = rollout.name_any(),
+                    "Warmup duration is configured but step_start_time is missing or invalid; skipping metrics analysis and treating warmup as just started"
+                );
+                return Ok(true);
+            }
+        }
+    }
+
     // Get rollout name for Prometheus labels
     let rollout_name = rollout.name_any();
 

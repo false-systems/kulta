@@ -2890,6 +2890,236 @@ async fn test_evaluate_rollout_metrics_no_analysis_config() {
 }
 
 // =============================================================================
+// Warmup Duration Tests
+// =============================================================================
+
+/// Test that metrics analysis is skipped during warmup period
+#[tokio::test]
+async fn test_evaluate_rollout_metrics_skips_during_warmup() {
+    use crate::crd::rollout::{
+        AnalysisConfig, CanaryStrategy, GatewayAPIRouting, MetricConfig, TrafficRouting,
+    };
+    use chrono::Utc;
+
+    // ARRANGE: Rollout with warmup duration, step just started (within warmup)
+    let now = Utc::now();
+    let step_start = now.to_rfc3339();
+
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("warmup-test".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-canary".to_string(),
+                    stable_service: "test-stable".to_string(),
+                    steps: vec![],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                    analysis: Some(AnalysisConfig {
+                        prometheus: None,
+                        metrics: vec![MetricConfig {
+                            name: "error-rate".to_string(),
+                            threshold: 0.05,
+                            interval: None,
+                            failure_threshold: None,
+                            min_sample_size: None,
+                        }],
+                        failure_policy: None,
+                        warmup_duration: Some("60s".to_string()), // 60 second warmup
+                    }),
+                }),
+                blue_green: None,
+            },
+        },
+        status: Some(RolloutStatus {
+            replicas: 3,
+            ready_replicas: 3,
+            updated_replicas: 1,
+            current_step_index: Some(0),
+            current_weight: Some(10),
+            phase: Some(Phase::Progressing),
+            step_start_time: Some(step_start), // Just started
+            ..Default::default()
+        }),
+    };
+
+    let ctx = Context::new_mock();
+
+    // ACT: Evaluate metrics (should skip due to warmup)
+    let result = evaluate_rollout_metrics(&rollout, &ctx).await;
+
+    // ASSERT: Should return Ok(true) - warmup not elapsed, skip analysis
+    match result {
+        Ok(is_healthy) => assert!(
+            is_healthy,
+            "Should skip analysis during warmup and return healthy"
+        ),
+        Err(e) => panic!("Should succeed during warmup, got error: {:?}", e),
+    }
+}
+
+/// Test that metrics analysis runs after warmup period elapses
+#[tokio::test]
+async fn test_evaluate_rollout_metrics_runs_after_warmup() {
+    use crate::crd::rollout::{
+        AnalysisConfig, CanaryStrategy, GatewayAPIRouting, MetricConfig, TrafficRouting,
+    };
+    use chrono::{Duration as ChronoDuration, Utc};
+
+    // ARRANGE: Rollout with warmup duration, step started long ago (warmup elapsed)
+    let step_start = (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339(); // 2 min ago
+
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("warmup-elapsed-test".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-canary".to_string(),
+                    stable_service: "test-stable".to_string(),
+                    steps: vec![],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                    analysis: Some(AnalysisConfig {
+                        prometheus: None,
+                        metrics: vec![MetricConfig {
+                            name: "error-rate".to_string(),
+                            threshold: 0.05,
+                            interval: None,
+                            failure_threshold: None,
+                            min_sample_size: None,
+                        }],
+                        failure_policy: None,
+                        warmup_duration: Some("60s".to_string()), // 60 second warmup
+                    }),
+                }),
+                blue_green: None,
+            },
+        },
+        status: Some(RolloutStatus {
+            replicas: 3,
+            ready_replicas: 3,
+            updated_replicas: 1,
+            current_step_index: Some(0),
+            current_weight: Some(10),
+            phase: Some(Phase::Progressing),
+            step_start_time: Some(step_start), // Started 2 min ago - warmup elapsed
+            ..Default::default()
+        }),
+    };
+
+    // Set mock Prometheus response (healthy metrics)
+    let ctx = Context::new_mock();
+    ctx.prometheus_client.set_mock_response(
+        r#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1234567890,"0.01"]}]}}"#.to_string()
+    );
+
+    // ACT: Evaluate metrics (should run since warmup elapsed)
+    let result = evaluate_rollout_metrics(&rollout, &ctx).await;
+
+    // ASSERT: Should succeed (mock Prometheus returns healthy)
+    // The important thing is that it actually tried to evaluate, not skip
+    assert!(result.is_ok(), "Should evaluate metrics after warmup");
+}
+
+/// Test that metrics analysis runs when no warmup duration configured
+#[tokio::test]
+async fn test_evaluate_rollout_metrics_no_warmup_configured() {
+    use crate::crd::rollout::{
+        AnalysisConfig, CanaryStrategy, GatewayAPIRouting, MetricConfig, TrafficRouting,
+    };
+    use chrono::Utc;
+
+    // ARRANGE: Rollout without warmup duration
+    let step_start = Utc::now().to_rfc3339();
+
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("no-warmup-test".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                simple: None,
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-canary".to_string(),
+                    stable_service: "test-stable".to_string(),
+                    steps: vec![],
+                    traffic_routing: Some(TrafficRouting {
+                        gateway_api: Some(GatewayAPIRouting {
+                            http_route: "test-route".to_string(),
+                        }),
+                    }),
+                    analysis: Some(AnalysisConfig {
+                        prometheus: None,
+                        metrics: vec![MetricConfig {
+                            name: "error-rate".to_string(),
+                            threshold: 0.05,
+                            interval: None,
+                            failure_threshold: None,
+                            min_sample_size: None,
+                        }],
+                        failure_policy: None,
+                        warmup_duration: None, // No warmup
+                    }),
+                }),
+                blue_green: None,
+            },
+        },
+        status: Some(RolloutStatus {
+            replicas: 3,
+            ready_replicas: 3,
+            updated_replicas: 1,
+            current_step_index: Some(0),
+            current_weight: Some(10),
+            phase: Some(Phase::Progressing),
+            step_start_time: Some(step_start),
+            ..Default::default()
+        }),
+    };
+
+    // Set mock Prometheus response (healthy metrics)
+    let ctx = Context::new_mock();
+    ctx.prometheus_client.set_mock_response(
+        r#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1234567890,"0.01"]}]}}"#.to_string()
+    );
+
+    // ACT: Evaluate metrics (should run immediately, no warmup)
+    let result = evaluate_rollout_metrics(&rollout, &ctx).await;
+
+    // ASSERT: Should succeed (evaluates immediately)
+    assert!(
+        result.is_ok(),
+        "Should evaluate metrics immediately without warmup"
+    );
+}
+
+// =============================================================================
 // HTTPRoute Traffic Splitting Tests
 // =============================================================================
 

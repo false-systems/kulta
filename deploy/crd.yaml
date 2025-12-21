@@ -9607,6 +9607,12 @@ spec:
                 description: Total number of non-terminated pods
                 format: int32
                 type: integer
+              stepStartTime:
+                description: 'Timestamp when current step started (RFC3339 format)
+
+                  Used for warmup duration tracking before metrics analysis begins'
+                nullable: true
+                type: string
               updatedReplicas:
                 default: 0
                 description: Number of updated replicas (canary)
