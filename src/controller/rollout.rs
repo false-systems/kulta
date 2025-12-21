@@ -1324,11 +1324,11 @@ async fn evaluate_rollout_metrics(
             if let Some(start_time) = step_start_time {
                 let now = Utc::now();
                 let elapsed = now.signed_duration_since(start_time);
-                let warmup_secs = warmup_duration.as_secs() as i64;
+                let warmup_duration_secs = warmup_duration.as_secs() as i64;
 
-                if elapsed.num_seconds() < warmup_secs {
+                if elapsed.num_seconds() < warmup_duration_secs {
                     // Still in warmup period - skip analysis, consider healthy
-                    let remaining = warmup_secs - elapsed.num_seconds();
+                    let remaining = warmup_duration_secs - elapsed.num_seconds();
                     debug!(
                         rollout = rollout.name_any(),
                         warmup_remaining_secs = remaining,
