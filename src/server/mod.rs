@@ -13,8 +13,10 @@ mod health;
 pub mod leader;
 pub mod metrics;
 pub mod shutdown;
+pub mod webhook;
 
 pub use health::{run_health_server, ReadinessState};
+pub use webhook::handle_convert;
 pub use leader::{run_leader_election, LeaderConfig, LeaderState};
 pub use metrics::{create_metrics, ControllerMetrics, SharedMetrics};
 pub use shutdown::{shutdown_channel, wait_for_signal, ShutdownController, ShutdownSignal};

@@ -1,15 +1,16 @@
-//! Health check and metrics endpoints for Kubernetes probes
+//! Health check, metrics, and webhook endpoints for Kubernetes
 //!
 //! - `/healthz` - Liveness: Is the process alive?
 //! - `/readyz` - Readiness: Is the controller ready to handle requests?
 //! - `/metrics` - Prometheus metrics in text format
+//! - `/convert` - CRD conversion webhook (v1alpha1 <-> v1beta1)
 
 use crate::server::metrics::SharedMetrics;
 use axum::{
     extract::State,
     http::{header::CONTENT_TYPE, StatusCode},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use std::net::SocketAddr;
@@ -135,6 +136,7 @@ pub async fn run_health_server(
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(self::metrics))
+        .route("/convert", post(super::webhook::handle_convert))
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
