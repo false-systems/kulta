@@ -2,7 +2,7 @@
 //!
 //! TDD: Tests written before implementation
 
-use super::{convert_rollout, ConversionRequest, ConversionResponse};
+use super::{convert_rollout, ConversionRequest};
 use serde_json::json;
 
 /// Test: Webhook converts v1alpha1 to v1beta1

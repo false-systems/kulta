@@ -38,10 +38,20 @@ cloudevents-sdk = { version = "0.8", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 
 # HTTP client for CDEvents emission
-reqwest = { version = "0.12", features = ["json"] }
+# Using rustls-tls which uses ring as the crypto backend to match our direct rustls dependency
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 # HTTP server for health endpoints
 axum = "0.8"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+
+# TLS certificate generation
+rcgen = "0.13"
+base64 = "0.22"
+pem = "3"
+time = "0.3"
 
 # Async trait support for strategy pattern
 async-trait = "0.1"
@@ -51,6 +61,8 @@ prometheus = "0.13"
 
 [dev-dependencies]
 serde_yaml = "0.9"
+x509-parser = "0.17"
+pem = "3"
 
 # Integration test dependencies
 toml = "0.8"

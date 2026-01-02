@@ -109,6 +109,11 @@ impl Context {
     #[cfg(test)]
     #[allow(clippy::unwrap_used)] // Test helper - panicking is acceptable
     pub fn new_mock() -> Self {
+        // Install ring as the default crypto provider for rustls
+        // This is needed because reqwest/kube use rustls, and we need to pick a provider
+        // The install_default() call is idempotent - it's safe to call multiple times
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
         // For testing, create a mock client that doesn't require kubeconfig
         // Use a minimal Config - the client won't actually be used in unit tests
         let mut config = kube::Config::new("https://localhost:8080".parse().unwrap());
