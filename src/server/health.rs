@@ -1,15 +1,16 @@
-//! Health check and metrics endpoints for Kubernetes probes
+//! Health check, metrics, and webhook endpoints for Kubernetes
 //!
 //! - `/healthz` - Liveness: Is the process alive?
 //! - `/readyz` - Readiness: Is the controller ready to handle requests?
 //! - `/metrics` - Prometheus metrics in text format
+//! - `/convert` - CRD conversion webhook (v1alpha1 <-> v1beta1)
 
 use crate::server::metrics::SharedMetrics;
 use axum::{
     extract::State,
     http::{header::CONTENT_TYPE, StatusCode},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use std::net::SocketAddr;
@@ -110,7 +111,19 @@ async fn metrics(State(state): State<ServerState>) -> impl IntoResponse {
     }
 }
 
-/// Run the health server on the specified port
+/// Build the router for health, metrics, and webhook endpoints
+fn build_router(readiness: ReadinessState, metrics: SharedMetrics) -> Router {
+    let state = ServerState::new(readiness, metrics);
+
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
+        .route("/metrics", get(self::metrics))
+        .route("/convert", post(super::webhook::handle_convert))
+        .with_state(state)
+}
+
+/// Run the health server on the specified port (HTTP, no TLS)
 ///
 /// This function starts an HTTP server that responds to:
 /// - GET /healthz - Always returns 200 OK (liveness)
@@ -129,20 +142,49 @@ pub async fn run_health_server(
     readiness: ReadinessState,
     metrics: SharedMetrics,
 ) -> Result<(), std::io::Error> {
-    let state = ServerState::new(readiness, metrics);
-
-    let app = Router::new()
-        .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz))
-        .route("/metrics", get(self::metrics))
-        .with_state(state);
+    let app = build_router(readiness, metrics);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await?;
     // Log after successful bind - server is actually listening
-    info!(port = %port, "Health and metrics server listening");
+    info!(port = %port, "Health and metrics server listening (HTTP)");
 
     axum::serve(listener, app)
         .await
         .map_err(std::io::Error::other)
+}
+
+/// Run the health server with TLS (HTTPS)
+///
+/// This function starts an HTTPS server for secure webhook communication.
+/// Used when the conversion webhook is enabled.
+///
+/// # Arguments
+/// * `port` - The port to listen on (typically 8443 for HTTPS)
+/// * `readiness` - Shared state for readiness tracking
+/// * `metrics` - Shared metrics registry for Prometheus
+/// * `tls_config` - rustls ServerConfig for TLS
+///
+/// # Returns
+/// This function runs forever until the server is shut down
+pub async fn run_health_server_tls(
+    port: u16,
+    readiness: ReadinessState,
+    metrics: SharedMetrics,
+    tls_config: std::sync::Arc<rustls::ServerConfig>,
+) -> Result<(), std::io::Error> {
+    use axum_server::tls_rustls::RustlsConfig;
+
+    let app = build_router(readiness, metrics);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+
+    // Convert Arc<ServerConfig> to RustlsConfig
+    let config = RustlsConfig::from_config(tls_config);
+
+    info!(port = %port, "Health, metrics, and webhook server listening (HTTPS)");
+
+    axum_server::bind_rustls(addr, config)
+        .serve(app.into_make_service())
+        .await
 }

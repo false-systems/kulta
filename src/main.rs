@@ -7,21 +7,42 @@ use kulta::controller::prometheus::PrometheusClient;
 use kulta::controller::{reconcile, Context, ReconcileError};
 use kulta::crd::rollout::Rollout;
 use kulta::server::{
-    create_metrics, run_health_server, run_leader_election, shutdown_channel, wait_for_signal,
-    LeaderConfig, LeaderState, ReadinessState,
+    build_rustls_config, create_metrics, initialize_tls, run_health_server, run_health_server_tls,
+    run_leader_election, shutdown_channel, wait_for_signal, LeaderConfig, LeaderState,
+    ReadinessState, DEFAULT_TLS_SECRET_NAME,
 };
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-/// Default port for health endpoints
+/// Default port for health endpoints (HTTP)
 const HEALTH_PORT: u16 = 8080;
+
+/// Default port for webhook endpoints (HTTPS)
+const WEBHOOK_PORT: u16 = 8443;
 
 /// Check if leader election is enabled via env var
 fn is_leader_election_enabled() -> bool {
     std::env::var("KULTA_LEADER_ELECTION")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false)
+}
+
+/// Check if webhook TLS is enabled via env var
+fn is_webhook_tls_enabled() -> bool {
+    std::env::var("KULTA_WEBHOOK_TLS")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+}
+
+/// Get webhook service name from env (default: kulta-controller)
+fn get_webhook_service_name() -> String {
+    std::env::var("KULTA_SERVICE_NAME").unwrap_or_else(|_| "kulta-controller".to_string())
+}
+
+/// Get controller namespace from env (default: kulta-system)
+fn get_controller_namespace() -> String {
+    std::env::var("KULTA_NAMESPACE").unwrap_or_else(|_| "kulta-system".to_string())
 }
 
 /// Error policy for the controller
@@ -75,28 +96,73 @@ async fn main() -> anyhow::Result<()> {
     // Create leader state
     let leader_state = LeaderState::new();
 
-    // Start health server in background
-    let health_readiness = readiness.clone();
-    let health_metrics = metrics.clone();
-    let health_handle = tokio::spawn(async move {
-        if let Err(e) = run_health_server(HEALTH_PORT, health_readiness, health_metrics).await {
-            warn!(error = %e, "Health server failed");
-        }
-    });
-    info!(port = HEALTH_PORT, "Health and metrics server task spawned");
-
-    // Create Kubernetes client
+    // Create Kubernetes client first (needed for TLS init)
     let client = match Client::try_default().await {
         Ok(c) => c,
         Err(e) => {
             error!(error = %e, "Failed to create Kubernetes client");
-            // Abort health server to avoid leaving it running orphaned
-            health_handle.abort();
             return Err(e.into());
         }
     };
-
     info!("Connected to Kubernetes cluster");
+
+    // Initialize TLS if webhook is enabled
+    let webhook_tls_enabled = is_webhook_tls_enabled();
+    let tls_config = if webhook_tls_enabled {
+        let service_name = get_webhook_service_name();
+        let namespace = get_controller_namespace();
+
+        info!(
+            service = %service_name,
+            namespace = %namespace,
+            "Initializing webhook TLS certificates"
+        );
+
+        match initialize_tls(&client, &service_name, &namespace, DEFAULT_TLS_SECRET_NAME).await {
+            Ok(bundle) => {
+                match build_rustls_config(&bundle) {
+                    Ok(config) => {
+                        info!("Webhook TLS initialized successfully");
+                        Some(config)
+                    }
+                    Err(e) => {
+                        error!(error = ?e, "Failed to build TLS config");
+                        return Err(anyhow::anyhow!("TLS config error: {}", e));
+                    }
+                }
+            }
+            Err(e) => {
+                error!(error = ?e, "Failed to initialize TLS certificates");
+                return Err(anyhow::anyhow!("TLS init error: {}", e));
+            }
+        }
+    } else {
+        info!("Webhook TLS disabled - running HTTP only");
+        None
+    };
+
+    // Start health/webhook server in background
+    let health_readiness = readiness.clone();
+    let health_metrics = metrics.clone();
+    let health_handle = if let Some(config) = tls_config {
+        // HTTPS mode - webhook enabled
+        tokio::spawn(async move {
+            if let Err(e) = run_health_server_tls(WEBHOOK_PORT, health_readiness, health_metrics, config).await {
+                warn!(error = %e, "HTTPS server failed");
+            }
+        })
+    } else {
+        // HTTP mode - no webhook
+        tokio::spawn(async move {
+            if let Err(e) = run_health_server(HEALTH_PORT, health_readiness, health_metrics).await {
+                warn!(error = %e, "Health server failed");
+            }
+        })
+    };
+
+    let server_port = if webhook_tls_enabled { WEBHOOK_PORT } else { HEALTH_PORT };
+    let server_mode = if webhook_tls_enabled { "HTTPS" } else { "HTTP" };
+    info!(port = server_port, mode = server_mode, "Server task spawned");
 
     // Start leader election if enabled
     let leader_election_enabled = is_leader_election_enabled();
