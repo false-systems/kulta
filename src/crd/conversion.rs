@@ -13,7 +13,7 @@ use super::v1beta1;
 pub const DEFAULT_MAX_SURGE: &str = "25%";
 
 /// Default maxUnavailable value when converting from v1alpha1
-pub const DEFAULT_MAX_UNAVAILABLE: i32 = 0;
+pub const DEFAULT_MAX_UNAVAILABLE: &str = "0";
 
 /// Default progressDeadlineSeconds when converting from v1alpha1
 pub const DEFAULT_PROGRESS_DEADLINE_SECONDS: i32 = 600;
@@ -22,7 +22,7 @@ pub const DEFAULT_PROGRESS_DEADLINE_SECONDS: i32 = 600;
 ///
 /// Adds default values for fields new in v1beta1:
 /// - maxSurge: "25%"
-/// - maxUnavailable: 0
+/// - maxUnavailable: "0"
 /// - progressDeadlineSeconds: 600
 pub fn convert_to_v1beta1(spec: &v1alpha1::RolloutSpec) -> v1beta1::RolloutSpec {
     v1beta1::RolloutSpec {
@@ -32,7 +32,7 @@ pub fn convert_to_v1beta1(spec: &v1alpha1::RolloutSpec) -> v1beta1::RolloutSpec 
         strategy: spec.strategy.clone(),
         // New fields get defaults
         max_surge: Some(DEFAULT_MAX_SURGE.to_string()),
-        max_unavailable: Some(DEFAULT_MAX_UNAVAILABLE),
+        max_unavailable: Some(DEFAULT_MAX_UNAVAILABLE.to_string()),
         progress_deadline_seconds: Some(DEFAULT_PROGRESS_DEADLINE_SECONDS),
     }
 }

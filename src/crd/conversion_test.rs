@@ -34,8 +34,8 @@ fn test_v1alpha1_to_v1beta1_adds_default_max_unavailable() {
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
 
-    // Should have default maxUnavailable of 0
-    assert_eq!(v1beta1_spec.max_unavailable, Some(0));
+    // Should have default maxUnavailable of "0"
+    assert_eq!(v1beta1_spec.max_unavailable, Some("0".to_string()));
 }
 
 /// Test: v1alpha1 -> v1beta1 adds default progressDeadlineSeconds
@@ -101,7 +101,7 @@ fn test_v1beta1_to_v1alpha1_drops_new_fields() {
         template: Default::default(),
         strategy: v1beta1::RolloutStrategy::default(),
         max_surge: Some("50%".to_string()),
-        max_unavailable: Some(1),
+        max_unavailable: Some("1".to_string()),
         progress_deadline_seconds: Some(300),
     };
 
@@ -132,7 +132,7 @@ fn test_v1beta1_to_v1alpha1_preserves_existing_fields() {
             blue_green: None,
         },
         max_surge: Some("25%".to_string()),
-        max_unavailable: Some(0),
+        max_unavailable: Some("0".to_string()),
         progress_deadline_seconds: Some(600),
     };
 
@@ -175,7 +175,7 @@ fn test_roundtrip_v1beta1_to_v1alpha1_to_v1beta1() {
         template: Default::default(),
         strategy: v1beta1::RolloutStrategy::default(),
         max_surge: Some("50%".to_string()),
-        max_unavailable: Some(2),
+        max_unavailable: Some("2".to_string()),
         progress_deadline_seconds: Some(900),
     };
 
@@ -187,6 +187,6 @@ fn test_roundtrip_v1beta1_to_v1alpha1_to_v1beta1() {
 
     // New fields get DEFAULT values (not original) because v1alpha1 doesn't have them
     assert_eq!(back.max_surge, Some("25%".to_string())); // default, not "50%"
-    assert_eq!(back.max_unavailable, Some(0)); // default, not 2
+    assert_eq!(back.max_unavailable, Some("0".to_string())); // default, not "2"
     assert_eq!(back.progress_deadline_seconds, Some(600)); // default, not 900
 }

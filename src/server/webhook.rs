@@ -71,14 +71,35 @@ fn extract_version(api_version: &str) -> Option<&str> {
     api_version.split('/').next_back()
 }
 
+/// Build a short context string (namespace/name) for error messages
+fn object_context(obj: &Value) -> String {
+    let metadata = obj.get("metadata");
+    let name = metadata.and_then(|m| m.get("name")).and_then(|n| n.as_str());
+    let namespace = metadata
+        .and_then(|m| m.get("namespace"))
+        .and_then(|n| n.as_str());
+    match (namespace, name) {
+        (Some(ns), Some(n)) => format!(" (namespace: {}, name: {})", ns, n),
+        (None, Some(n)) => format!(" (name: {})", n),
+        (Some(ns), None) => format!(" (namespace: {})", ns),
+        _ => String::new(),
+    }
+}
+
 /// Convert a single Rollout object to the desired version
 fn convert_object(obj: &Value, desired_version: &str) -> Result<Value, String> {
     let current_api_version = obj
         .get("apiVersion")
         .and_then(|v| v.as_str())
-        .ok_or("Missing apiVersion")?;
+        .ok_or_else(|| format!("Missing apiVersion{}", object_context(obj)))?;
 
-    let current_version = extract_version(current_api_version).ok_or("Invalid apiVersion format")?;
+    let current_version = extract_version(current_api_version).ok_or_else(|| {
+        format!(
+            "Invalid apiVersion format '{}'{}",
+            current_api_version,
+            object_context(obj)
+        )
+    })?;
 
     // Same version - no conversion needed
     if current_version == desired_version {

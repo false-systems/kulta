@@ -29,14 +29,14 @@ fn test_convert_v1alpha1_to_v1beta1() {
 
     let response = convert_rollout(request);
 
-    assert!(response.result.status == "Success");
+    assert_eq!(response.result.status, "Success");
     assert_eq!(response.uid, "test-uid-123");
     assert_eq!(response.converted_objects.len(), 1);
 
     let converted = &response.converted_objects[0];
     assert_eq!(converted["apiVersion"], "kulta.io/v1beta1");
     assert_eq!(converted["spec"]["maxSurge"], "25%");
-    assert_eq!(converted["spec"]["maxUnavailable"], 0);
+    assert_eq!(converted["spec"]["maxUnavailable"], "0");
     assert_eq!(converted["spec"]["progressDeadlineSeconds"], 600);
 }
 
@@ -67,7 +67,7 @@ fn test_convert_v1beta1_to_v1alpha1() {
 
     let response = convert_rollout(request);
 
-    assert!(response.result.status == "Success");
+    assert_eq!(response.result.status, "Success");
     assert_eq!(response.converted_objects.len(), 1);
 
     let converted = &response.converted_objects[0];
@@ -104,7 +104,7 @@ fn test_convert_multiple_objects() {
 
     let response = convert_rollout(request);
 
-    assert!(response.result.status == "Success");
+    assert_eq!(response.result.status, "Success");
     assert_eq!(response.converted_objects.len(), 2);
     assert_eq!(response.converted_objects[0]["metadata"]["name"], "rollout-1");
     assert_eq!(response.converted_objects[1]["metadata"]["name"], "rollout-2");
@@ -182,7 +182,7 @@ fn test_convert_same_version_is_noop() {
 
     let response = convert_rollout(request);
 
-    assert!(response.result.status == "Success");
+    assert_eq!(response.result.status, "Success");
     // Object should be unchanged
     assert_eq!(response.converted_objects[0]["apiVersion"], "kulta.io/v1alpha1");
 }
@@ -203,6 +203,6 @@ fn test_convert_unknown_version_fails() {
 
     let response = convert_rollout(request);
 
-    assert!(response.result.status == "Failed");
+    assert_eq!(response.result.status, "Failed");
     assert!(response.result.message.is_some());
 }

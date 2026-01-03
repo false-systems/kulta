@@ -60,10 +60,10 @@ pub struct RolloutSpec {
     pub max_surge: Option<String>,
 
     /// Maximum number of pods that can be unavailable during the update.
-    /// Value can be an absolute number (e.g., 1) or percentage (e.g., "25%").
-    /// Defaults to 0.
+    /// Value can be an absolute number (e.g., "1") or percentage (e.g., "25%").
+    /// Defaults to "0".
     #[serde(rename = "maxUnavailable", skip_serializing_if = "Option::is_none")]
-    pub max_unavailable: Option<i32>,
+    pub max_unavailable: Option<String>,
 
     /// Maximum time in seconds for a rollout to make progress before it is considered failed.
     /// Defaults to 600 (10 minutes).
