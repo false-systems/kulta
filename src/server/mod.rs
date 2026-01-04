@@ -17,14 +17,14 @@ pub mod tls;
 pub mod webhook;
 
 pub use health::{run_health_server, run_health_server_tls, ReadinessState};
-pub use tls::{
-    build_rustls_config, generate_certificate_bundle, initialize_tls, CertificateBundle,
-    TlsError, DEFAULT_TLS_SECRET_NAME,
-};
-pub use webhook::handle_convert;
 pub use leader::{run_leader_election, LeaderConfig, LeaderState};
 pub use metrics::{create_metrics, ControllerMetrics, SharedMetrics};
 pub use shutdown::{shutdown_channel, wait_for_signal, ShutdownController, ShutdownSignal};
+pub use tls::{
+    build_rustls_config, generate_certificate_bundle, initialize_tls, CertificateBundle, TlsError,
+    DEFAULT_TLS_SECRET_NAME,
+};
+pub use webhook::handle_convert;
 
 #[cfg(test)]
 #[path = "health_test.rs"]

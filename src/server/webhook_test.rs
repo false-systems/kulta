@@ -106,8 +106,14 @@ fn test_convert_multiple_objects() {
 
     assert_eq!(response.result.status, "Success");
     assert_eq!(response.converted_objects.len(), 2);
-    assert_eq!(response.converted_objects[0]["metadata"]["name"], "rollout-1");
-    assert_eq!(response.converted_objects[1]["metadata"]["name"], "rollout-2");
+    assert_eq!(
+        response.converted_objects[0]["metadata"]["name"],
+        "rollout-1"
+    );
+    assert_eq!(
+        response.converted_objects[1]["metadata"]["name"],
+        "rollout-2"
+    );
 }
 
 /// Test: Webhook preserves metadata during conversion
@@ -184,7 +190,10 @@ fn test_convert_same_version_is_noop() {
 
     assert_eq!(response.result.status, "Success");
     // Object should be unchanged
-    assert_eq!(response.converted_objects[0]["apiVersion"], "kulta.io/v1alpha1");
+    assert_eq!(
+        response.converted_objects[0]["apiVersion"],
+        "kulta.io/v1alpha1"
+    );
 }
 
 /// Test: Webhook returns error for unknown version

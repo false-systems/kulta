@@ -109,9 +109,11 @@ fn generate_server_cert(
 
     // DNS names for the service
     params.subject_alt_names = vec![
-        SanType::DnsName(service_name.try_into().map_err(|e| {
-            TlsError::Serialization(format!("Invalid service name: {}", e))
-        })?),
+        SanType::DnsName(
+            service_name
+                .try_into()
+                .map_err(|e| TlsError::Serialization(format!("Invalid service name: {}", e)))?,
+        ),
         SanType::DnsName(
             format!("{}.{}", service_name, namespace)
                 .try_into()
@@ -259,7 +261,10 @@ pub async fn save_to_secret(
             namespace: Some(namespace.to_string()),
             labels: Some({
                 let mut labels = BTreeMap::new();
-                labels.insert("app.kubernetes.io/managed-by".to_string(), "kulta".to_string());
+                labels.insert(
+                    "app.kubernetes.io/managed-by".to_string(),
+                    "kulta".to_string(),
+                );
                 labels
             }),
             ..Default::default()
@@ -275,11 +280,7 @@ pub async fn save_to_secret(
         Err(kube::Error::Api(err)) if err.code == 409 => {
             // Already exists, patch it
             secrets
-                .patch(
-                    secret_name,
-                    &PatchParams::default(),
-                    &Patch::Merge(&secret),
-                )
+                .patch(secret_name, &PatchParams::default(), &Patch::Merge(&secret))
                 .await?;
             Ok(())
         }
@@ -292,9 +293,9 @@ pub async fn patch_crd_ca_bundle(
     client: &kube::Client,
     ca_bundle_base64: &str,
 ) -> Result<(), TlsError> {
+    use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
     use kube::api::{Patch, PatchParams};
     use kube::Api;
-    use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceDefinition;
 
     let crds: Api<CustomResourceDefinition> = Api::all(client.clone());
 
@@ -340,7 +341,10 @@ pub async fn initialize_tls(
     // Try to load existing certs
     match load_from_secret(client, namespace, secret_name).await? {
         Some(bundle) => {
-            info!(secret = secret_name, "Loaded existing TLS certificates from Secret");
+            info!(
+                secret = secret_name,
+                "Loaded existing TLS certificates from Secret"
+            );
 
             // Still patch the CRD in case it was recreated
             let ca_bundle = bundle.ca_bundle_base64()?;
@@ -372,15 +376,18 @@ pub async fn initialize_tls(
 }
 
 /// Build a rustls ServerConfig from the certificate bundle
-pub fn build_rustls_config(bundle: &CertificateBundle) -> Result<Arc<rustls::ServerConfig>, TlsError> {
+pub fn build_rustls_config(
+    bundle: &CertificateBundle,
+) -> Result<Arc<rustls::ServerConfig>, TlsError> {
     use rustls::pki_types::CertificateDer;
     use rustls_pemfile::{certs, private_key};
     use std::io::BufReader;
 
     // Parse server certificate chain
-    let cert_chain: Vec<CertificateDer<'static>> = certs(&mut BufReader::new(bundle.server_cert_pem.as_bytes()))
-        .filter_map(|r| r.ok())
-        .collect();
+    let cert_chain: Vec<CertificateDer<'static>> =
+        certs(&mut BufReader::new(bundle.server_cert_pem.as_bytes()))
+            .filter_map(|r| r.ok())
+            .collect();
 
     if cert_chain.is_empty() {
         return Err(TlsError::InvalidPem);
@@ -392,13 +399,14 @@ pub fn build_rustls_config(bundle: &CertificateBundle) -> Result<Arc<rustls::Ser
         .ok_or(TlsError::InvalidPem)?;
 
     // Build rustls config with ring crypto provider
-    let config = rustls::ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| TlsError::Parse(format!("Failed to set protocol versions: {}", e)))?
-        .with_no_client_auth()
-        .with_single_cert(cert_chain, key)
-        .map_err(|e| TlsError::Parse(format!("Failed to build TLS config: {}", e)))?;
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| TlsError::Parse(format!("Failed to set protocol versions: {}", e)))?
+    .with_no_client_auth()
+    .with_single_cert(cert_chain, key)
+    .map_err(|e| TlsError::Parse(format!("Failed to build TLS config: {}", e)))?;
 
     Ok(Arc::new(config))
 }
-

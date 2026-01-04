@@ -74,7 +74,9 @@ fn extract_version(api_version: &str) -> Option<&str> {
 /// Build a short context string (namespace/name) for error messages
 fn object_context(obj: &Value) -> String {
     let metadata = obj.get("metadata");
-    let name = metadata.and_then(|m| m.get("name")).and_then(|n| n.as_str());
+    let name = metadata
+        .and_then(|m| m.get("name"))
+        .and_then(|n| n.as_str());
     let namespace = metadata
         .and_then(|m| m.get("namespace"))
         .and_then(|n| n.as_str());

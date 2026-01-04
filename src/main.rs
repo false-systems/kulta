@@ -119,18 +119,16 @@ async fn main() -> anyhow::Result<()> {
         );
 
         match initialize_tls(&client, &service_name, &namespace, DEFAULT_TLS_SECRET_NAME).await {
-            Ok(bundle) => {
-                match build_rustls_config(&bundle) {
-                    Ok(config) => {
-                        info!("Webhook TLS initialized successfully");
-                        Some(config)
-                    }
-                    Err(e) => {
-                        error!(error = ?e, "Failed to build TLS config");
-                        return Err(anyhow::anyhow!("TLS config error: {}", e));
-                    }
+            Ok(bundle) => match build_rustls_config(&bundle) {
+                Ok(config) => {
+                    info!("Webhook TLS initialized successfully");
+                    Some(config)
                 }
-            }
+                Err(e) => {
+                    error!(error = ?e, "Failed to build TLS config");
+                    return Err(anyhow::anyhow!("TLS config error: {}", e));
+                }
+            },
             Err(e) => {
                 error!(error = ?e, "Failed to initialize TLS certificates");
                 return Err(anyhow::anyhow!("TLS init error: {}", e));
@@ -147,7 +145,9 @@ async fn main() -> anyhow::Result<()> {
     let health_handle = if let Some(config) = tls_config {
         // HTTPS mode - webhook enabled
         tokio::spawn(async move {
-            if let Err(e) = run_health_server_tls(WEBHOOK_PORT, health_readiness, health_metrics, config).await {
+            if let Err(e) =
+                run_health_server_tls(WEBHOOK_PORT, health_readiness, health_metrics, config).await
+            {
                 warn!(error = %e, "HTTPS server failed");
             }
         })
@@ -160,9 +160,17 @@ async fn main() -> anyhow::Result<()> {
         })
     };
 
-    let server_port = if webhook_tls_enabled { WEBHOOK_PORT } else { HEALTH_PORT };
+    let server_port = if webhook_tls_enabled {
+        WEBHOOK_PORT
+    } else {
+        HEALTH_PORT
+    };
     let server_mode = if webhook_tls_enabled { "HTTPS" } else { "HTTP" };
-    info!(port = server_port, mode = server_mode, "Server task spawned");
+    info!(
+        port = server_port,
+        mode = server_mode,
+        "Server task spawned"
+    );
 
     // Start leader election if enabled
     let leader_election_enabled = is_leader_election_enabled();

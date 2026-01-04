@@ -2,9 +2,9 @@
 //!
 //! TDD: These tests are written FIRST, before the implementation.
 
+use super::{convert_to_v1alpha1, convert_to_v1beta1};
 use crate::crd::v1alpha1;
 use crate::crd::v1beta1;
-use super::{convert_to_v1beta1, convert_to_v1alpha1};
 
 /// Test: v1alpha1 -> v1beta1 adds default maxSurge
 #[test]
@@ -66,12 +66,10 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
             canary: Some(v1alpha1::CanaryStrategy {
                 canary_service: "my-canary".to_string(),
                 stable_service: "my-stable".to_string(),
-                steps: vec![
-                    v1alpha1::CanaryStep {
-                        set_weight: Some(20),
-                        pause: None,
-                    },
-                ],
+                steps: vec![v1alpha1::CanaryStep {
+                    set_weight: Some(20),
+                    pause: None,
+                }],
                 traffic_routing: None,
                 analysis: None,
             }),
@@ -85,7 +83,11 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
     assert_eq!(v1beta1_spec.replicas, 5);
 
     // Canary strategy preserved
-    let canary = v1beta1_spec.strategy.canary.as_ref().expect("canary should exist");
+    let canary = v1beta1_spec
+        .strategy
+        .canary
+        .as_ref()
+        .expect("canary should exist");
     assert_eq!(canary.canary_service, "my-canary");
     assert_eq!(canary.stable_service, "my-stable");
     assert_eq!(canary.steps.len(), 1);
@@ -139,7 +141,11 @@ fn test_v1beta1_to_v1alpha1_preserves_existing_fields() {
     let v1alpha1_spec = convert_to_v1alpha1(&v1beta1_spec);
 
     assert_eq!(v1alpha1_spec.replicas, 10);
-    let canary = v1alpha1_spec.strategy.canary.as_ref().expect("canary should exist");
+    let canary = v1alpha1_spec
+        .strategy
+        .canary
+        .as_ref()
+        .expect("canary should exist");
     assert_eq!(canary.canary_service, "svc-canary");
     assert_eq!(canary.stable_service, "svc-stable");
 }

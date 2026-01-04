@@ -25,7 +25,9 @@ fn test_ca_cert_is_valid_pem() {
 fn test_server_cert_is_valid_pem() {
     let bundle = generate_certificate_bundle("kulta-controller", "kulta-system").unwrap();
 
-    assert!(bundle.server_cert_pem.contains("-----BEGIN CERTIFICATE-----"));
+    assert!(bundle
+        .server_cert_pem
+        .contains("-----BEGIN CERTIFICATE-----"));
     assert!(bundle.server_cert_pem.contains("-----END CERTIFICATE-----"));
 }
 
@@ -34,7 +36,9 @@ fn test_server_cert_is_valid_pem() {
 fn test_server_key_is_valid_pem() {
     let bundle = generate_certificate_bundle("kulta-controller", "kulta-system").unwrap();
 
-    assert!(bundle.server_key_pem.contains("-----BEGIN PRIVATE KEY-----"));
+    assert!(bundle
+        .server_key_pem
+        .contains("-----BEGIN PRIVATE KEY-----"));
     assert!(bundle.server_key_pem.contains("-----END PRIVATE KEY-----"));
 }
 
@@ -105,7 +109,11 @@ fn test_build_rustls_config_succeeds() {
     let bundle = generate_certificate_bundle("kulta-controller", "kulta-system").unwrap();
 
     let config = build_rustls_config(&bundle);
-    assert!(config.is_ok(), "Should build rustls config: {:?}", config.err());
+    assert!(
+        config.is_ok(),
+        "Should build rustls config: {:?}",
+        config.err()
+    );
 }
 
 /// Test: CA certificate has CA flag set
@@ -134,7 +142,10 @@ fn test_server_cert_is_not_ca() {
 
     // Server cert may or may not have basic constraints, but if it does, ca should be false
     if let Ok(Some(basic_constraints)) = cert.basic_constraints() {
-        assert!(!basic_constraints.value.ca, "Server cert should not be a CA");
+        assert!(
+            !basic_constraints.value.ca,
+            "Server cert should not be a CA"
+        );
     }
     // If no basic constraints, that's also fine for a leaf cert
 }
