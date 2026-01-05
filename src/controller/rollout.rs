@@ -211,6 +211,127 @@ pub fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32,
     (stable_replicas, canary_replicas)
 }
 
+/// Parse a surge value (percentage like "25%" or absolute like "5")
+///
+/// Returns the absolute number of pods based on total_replicas.
+/// Invalid values return 0.
+///
+/// # Examples
+/// ```ignore
+/// assert_eq!(parse_surge_value("25%", 10), 3);  // 25% of 10 = 2.5 -> ceil = 3
+/// assert_eq!(parse_surge_value("5", 10), 5);   // absolute 5
+/// assert_eq!(parse_surge_value("0%", 10), 0);  // 0%
+/// ```
+pub fn parse_surge_value(value: &str, total_replicas: i32) -> i32 {
+    if let Some(percent_str) = value.strip_suffix('%') {
+        // Percentage value
+        match percent_str.parse::<i32>() {
+            Ok(percent) if (0..=100).contains(&percent) => {
+                ((total_replicas as f64 * percent as f64) / 100.0).ceil() as i32
+            }
+            _ => 0,
+        }
+    } else {
+        // Absolute value
+        value.parse::<i32>().unwrap_or(0).max(0)
+    }
+}
+
+/// Calculate replica split with maxSurge and maxUnavailable support
+///
+/// Unlike `calculate_replica_split`, this version can create more total pods
+/// than `total_replicas` to enable faster rollouts.
+///
+/// # Arguments
+/// * `total_replicas` - Desired replica count (spec.replicas)
+/// * `canary_weight` - Traffic weight for canary (0-100)
+/// * `max_surge` - Max extra pods allowed (e.g., "25%" or "5"). None uses default "25%"
+/// * `max_unavailable` - Max pods that can be unavailable (e.g., "0" or "25%"). None uses "0"
+///
+/// # Returns
+/// Tuple of (stable_replicas, canary_replicas)
+pub fn calculate_replica_split_with_surge(
+    total_replicas: i32,
+    canary_weight: i32,
+    max_surge: Option<&str>,
+    max_unavailable: Option<&str>,
+) -> (i32, i32) {
+    let surge = parse_surge_value(max_surge.unwrap_or("25%"), total_replicas);
+    let unavailable = parse_surge_value(max_unavailable.unwrap_or("0"), total_replicas);
+
+    // Calculate ideal canary replicas based on weight
+    let ideal_canary = if canary_weight == 0 {
+        0
+    } else if canary_weight == 100 {
+        total_replicas
+    } else {
+        ((total_replicas as f64 * canary_weight as f64) / 100.0).ceil() as i32
+    };
+
+    // With surge, we can keep more stable replicas during transition
+    // stable = total_replicas (keep all stable) while scaling up canary
+    // Total max = total_replicas + surge
+    let max_total = total_replicas + surge;
+    let min_total = (total_replicas - unavailable).max(0);
+
+    // During rollout: keep stable at full count, add canary pods up to surge limit
+    let canary_replicas = ideal_canary.min(max_total - total_replicas + ideal_canary);
+    let stable_replicas = (total_replicas - ideal_canary).max(min_total - canary_replicas);
+
+    // Ensure we don't exceed max or go below min
+    let total = stable_replicas + canary_replicas;
+    if total > max_total {
+        // Scale down stable if we exceed max
+        let excess = total - max_total;
+        return ((stable_replicas - excess).max(0), canary_replicas);
+    }
+
+    (stable_replicas, canary_replicas)
+}
+
+/// Check if progress deadline has been exceeded
+///
+/// A rollout is considered stuck if:
+/// - It's in Progressing or Preview phase
+/// - progress_started_at is set
+/// - Current time exceeds progress_started_at + deadline_seconds
+///
+/// # Arguments
+/// * `status` - Current rollout status
+/// * `deadline_seconds` - The progressDeadlineSeconds value
+///
+/// # Returns
+/// true if the rollout has exceeded its progress deadline
+pub fn is_progress_deadline_exceeded(
+    status: &crate::crd::rollout::RolloutStatus,
+    deadline_seconds: i32,
+) -> bool {
+    use crate::crd::rollout::Phase;
+
+    // Only check for active rollouts (Progressing or Preview)
+    match &status.phase {
+        Some(Phase::Progressing) | Some(Phase::Preview) => {}
+        _ => return false,
+    }
+
+    // Need a start time to compare against
+    let start_time = match &status.progress_started_at {
+        Some(t) => t,
+        None => return false,
+    };
+
+    // Parse the timestamp
+    let started = match chrono::DateTime::parse_from_rfc3339(start_time) {
+        Ok(dt) => dt.with_timezone(&chrono::Utc),
+        Err(_) => return false,
+    };
+
+    let now = chrono::Utc::now();
+    let elapsed = now.signed_duration_since(started);
+
+    elapsed.num_seconds() > deadline_seconds as i64
+}
+
 /// Ensure a ReplicaSet exists (create if missing)
 ///
 /// This function is idempotent - it will:

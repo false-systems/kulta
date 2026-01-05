@@ -348,6 +348,11 @@ pub struct RolloutStatus {
     #[serde(rename = "stepStartTime", skip_serializing_if = "Option::is_none")]
     pub step_start_time: Option<String>,
 
+    /// Timestamp when rollout started progressing (RFC3339 format)
+    /// Used for progressDeadlineSeconds timeout detection
+    #[serde(rename = "progressStartedAt", skip_serializing_if = "Option::is_none")]
+    pub progress_started_at: Option<String>,
+
     /// Decision history for observability
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<Decision>,

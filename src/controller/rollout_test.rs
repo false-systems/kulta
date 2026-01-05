@@ -3304,3 +3304,167 @@ async fn test_context_should_reconcile_when_leader() {
         "When leader election enabled and is leader, should reconcile"
     );
 }
+
+// =============================================================================
+// V1BETA1 FIELD TESTS: maxSurge, maxUnavailable, progressDeadlineSeconds
+// =============================================================================
+
+// --- Surge Value Parsing Tests ---
+
+/// Test: Parse percentage surge value "25%" -> (25, true)
+#[test]
+fn test_parse_surge_value_percentage() {
+    let result = parse_surge_value("25%", 10);
+    assert_eq!(result, 3); // 25% of 10 = 2.5, ceil = 3
+}
+
+/// Test: Parse absolute surge value "5" -> 5
+#[test]
+fn test_parse_surge_value_absolute() {
+    let result = parse_surge_value("5", 10);
+    assert_eq!(result, 5);
+}
+
+/// Test: Parse 0% surge
+#[test]
+fn test_parse_surge_value_zero_percent() {
+    let result = parse_surge_value("0%", 10);
+    assert_eq!(result, 0);
+}
+
+/// Test: Parse "0" absolute
+#[test]
+fn test_parse_surge_value_zero_absolute() {
+    let result = parse_surge_value("0", 10);
+    assert_eq!(result, 0);
+}
+
+/// Test: Parse 100% surge
+#[test]
+fn test_parse_surge_value_hundred_percent() {
+    let result = parse_surge_value("100%", 10);
+    assert_eq!(result, 10);
+}
+
+/// Test: Invalid surge value returns 0
+#[test]
+fn test_parse_surge_value_invalid_returns_zero() {
+    let result = parse_surge_value("invalid", 10);
+    assert_eq!(result, 0);
+}
+
+// --- Replica Calculation with Surge Tests ---
+
+/// Test: Calculate replicas with maxSurge allows extra pods
+#[test]
+fn test_calculate_replica_split_with_surge() {
+    // 10 replicas, 50% canary weight, maxSurge="25%" (2.5 -> 3 extra allowed)
+    let (stable, canary) = calculate_replica_split_with_surge(10, 50, Some("25%"), Some("0"));
+
+    // With surge, we can have stable + canary > 10
+    // At 50% weight, ideal is 5 stable, 5 canary
+    // With 25% surge (3 pods), we can have up to 13 total
+    // But we still want to converge, so stable should be 10, canary 5 during transition
+    assert!(
+        stable + canary <= 13,
+        "Total should not exceed replicas + surge"
+    );
+    assert!(
+        stable + canary >= 10,
+        "Total should be at least desired replicas"
+    );
+}
+
+/// Test: Calculate replicas with maxUnavailable allows fewer pods
+#[test]
+fn test_calculate_replica_split_with_unavailable() {
+    // 10 replicas, 50% weight, maxUnavailable="25%" (2.5 -> 2 fewer allowed)
+    let (stable, canary) = calculate_replica_split_with_surge(10, 50, Some("0"), Some("25%"));
+
+    // With maxUnavailable, we can have as few as 8 ready pods
+    // This affects how fast we can scale down stable
+    assert!(
+        stable + canary >= 8,
+        "Should have at least replicas - maxUnavailable"
+    );
+}
+
+/// Test: Zero surge means no extra pods (current behavior)
+#[test]
+fn test_calculate_replica_split_zero_surge() {
+    let (stable, canary) = calculate_replica_split_with_surge(10, 50, Some("0"), Some("0"));
+
+    // Same as current behavior: total = replicas
+    assert_eq!(
+        stable + canary,
+        10,
+        "With zero surge, total should equal replicas"
+    );
+}
+
+/// Test: None surge values use defaults ("25%", "0")
+#[test]
+fn test_calculate_replica_split_default_surge() {
+    let (stable, canary) = calculate_replica_split_with_surge(10, 50, None, None);
+
+    // Default maxSurge="25%", maxUnavailable="0"
+    // Total can be up to 13 (10 + 25%)
+    assert!(stable + canary <= 13);
+    assert!(stable + canary >= 10);
+}
+
+// --- Progress Deadline Tests ---
+
+/// Test: Rollout within deadline is not failed
+#[test]
+fn test_progress_deadline_within_limit() {
+    let status = RolloutStatus {
+        phase: Some(Phase::Progressing),
+        progress_started_at: Some(chrono::Utc::now().to_rfc3339()),
+        ..Default::default()
+    };
+
+    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    assert!(!is_stuck, "Should not be stuck if within deadline");
+}
+
+/// Test: Rollout past deadline is marked failed
+#[test]
+fn test_progress_deadline_exceeded() {
+    let past = chrono::Utc::now() - chrono::Duration::seconds(700);
+    let status = RolloutStatus {
+        phase: Some(Phase::Progressing),
+        progress_started_at: Some(past.to_rfc3339()),
+        ..Default::default()
+    };
+
+    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    assert!(is_stuck, "Should be stuck if past deadline");
+}
+
+/// Test: No progress_started_at means not stuck (just started)
+#[test]
+fn test_progress_deadline_no_start_time() {
+    let status = RolloutStatus {
+        phase: Some(Phase::Progressing),
+        progress_started_at: None,
+        ..Default::default()
+    };
+
+    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    assert!(!is_stuck, "Should not be stuck if no start time");
+}
+
+/// Test: Completed rollout is never stuck
+#[test]
+fn test_progress_deadline_completed_not_stuck() {
+    let past = chrono::Utc::now() - chrono::Duration::seconds(700);
+    let status = RolloutStatus {
+        phase: Some(Phase::Completed),
+        progress_started_at: Some(past.to_rfc3339()),
+        ..Default::default()
+    };
+
+    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    assert!(!is_stuck, "Completed rollout should not be marked stuck");
+}

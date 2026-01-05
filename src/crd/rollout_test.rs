@@ -244,9 +244,46 @@ fn test_status_decisions_serialization() {
 ///   cargo run --bin gen-crd | python3 -c "import sys,json,yaml; print(yaml.dump(json.load(sys.stdin), default_flow_style=False, sort_keys=False))" > deploy/crd.yaml
 #[test]
 fn test_crd_matches_deployed_yaml() {
-    // Generate CRD from Rust types
-    let generated_crd = Rollout::crd();
-    let generated_json = serde_json::to_value(&generated_crd).expect("serialize generated CRD");
+    use crate::crd::v1beta1::Rollout as RolloutV1beta1;
+    use kube::CustomResourceExt;
+    use serde_json::json;
+
+    // Generate multi-version CRD (same as gen-crd.rs)
+    let mut crd: serde_json::Value =
+        serde_json::to_value(Rollout::crd()).expect("serialize v1alpha1 CRD");
+    let v1beta1_crd: serde_json::Value =
+        serde_json::to_value(RolloutV1beta1::crd()).expect("serialize v1beta1 CRD");
+
+    // Extract v1beta1 version entry
+    let v1beta1_version = v1beta1_crd["spec"]["versions"][0].clone();
+
+    // Configure versions
+    if let Some(versions) = crd["spec"]["versions"].as_array_mut() {
+        if let Some(v1alpha1) = versions.get_mut(0) {
+            v1alpha1["storage"] = json!(false);
+            v1alpha1["served"] = json!(true);
+        }
+        let mut v1beta1 = v1beta1_version;
+        v1beta1["storage"] = json!(true);
+        v1beta1["served"] = json!(true);
+        versions.push(v1beta1);
+    }
+
+    // Add conversion webhook
+    crd["spec"]["conversion"] = json!({
+        "strategy": "Webhook",
+        "webhook": {
+            "clientConfig": {
+                "service": {
+                    "name": "kulta-controller",
+                    "namespace": "kulta-system",
+                    "path": "/convert",
+                    "port": 8080
+                }
+            },
+            "conversionReviewVersions": ["v1"]
+        }
+    });
 
     // Load deployed CRD
     let deployed_yaml = include_str!("../../deploy/crd.yaml");
@@ -255,7 +292,7 @@ fn test_crd_matches_deployed_yaml() {
 
     // Compare - if this fails, run gen-crd to regenerate
     assert_eq!(
-        generated_json, deployed_crd,
+        crd, deployed_crd,
         "Generated CRD doesn't match deploy/crd.yaml. Regenerate with: \
          cargo run --bin gen-crd | python3 -c \"import sys,json,yaml; \
          print(yaml.dump(json.load(sys.stdin), default_flow_style=False, sort_keys=False))\" \
