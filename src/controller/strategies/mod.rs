@@ -355,6 +355,10 @@ mod tests {
                 selector: LabelSelector::default(),
                 template: PodTemplateSpec::default(),
                 strategy: strategy_spec,
+
+                max_surge: None,
+                max_unavailable: None,
+                progress_deadline_seconds: None,
             },
             status: None,
         }

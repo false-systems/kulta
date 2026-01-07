@@ -34,6 +34,27 @@ pub struct RolloutSpec {
 
     /// Deployment strategy (currently only canary)
     pub strategy: RolloutStrategy,
+
+    // === v1beta1 fields (optional for v1alpha1 compatibility) ===
+    /// Maximum number of pods that can be scheduled above the desired number during update.
+    /// Value can be an absolute number (e.g., "5") or percentage (e.g., "25%").
+    /// Defaults to "25%" when not specified.
+    #[serde(rename = "maxSurge", skip_serializing_if = "Option::is_none")]
+    pub max_surge: Option<String>,
+
+    /// Maximum number of pods that can be unavailable during the update.
+    /// Value can be an absolute number (e.g., "1") or percentage (e.g., "25%").
+    /// Defaults to "0" when not specified.
+    #[serde(rename = "maxUnavailable", skip_serializing_if = "Option::is_none")]
+    pub max_unavailable: Option<String>,
+
+    /// Maximum time in seconds for a rollout to make progress before it is considered failed.
+    /// Defaults to 600 (10 minutes) when not specified.
+    #[serde(
+        rename = "progressDeadlineSeconds",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub progress_deadline_seconds: Option<i32>,
 }
 
 fn default_replicas() -> i32 {

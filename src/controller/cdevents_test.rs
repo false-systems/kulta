@@ -32,6 +32,10 @@ async fn test_emit_service_deployed_on_initialization() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None, // No status yet - this is a new rollout
     };
@@ -127,6 +131,10 @@ async fn test_emit_service_upgraded_on_step_progression() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -229,6 +237,10 @@ async fn test_emit_service_rolledback_on_failure() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -337,6 +349,10 @@ async fn test_emit_service_published_on_completion() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -439,6 +455,10 @@ async fn test_cdevent_contains_kulta_custom_data() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -513,6 +533,10 @@ async fn test_simple_strategy_emits_deployed_and_published() {
                 canary: None,
                 blue_green: None,
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -582,6 +606,10 @@ async fn test_blue_green_emits_deployed_on_preview() {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -654,6 +682,10 @@ async fn test_blue_green_emits_published_on_promotion() {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };

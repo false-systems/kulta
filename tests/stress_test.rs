@@ -112,6 +112,10 @@ fn create_rollout(name: &str, namespace: &str, replicas: i32, image: &str) -> Ro
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     }
@@ -168,6 +172,10 @@ fn create_rollout_with_pauses(
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     }
@@ -808,6 +816,10 @@ async fn test_edge_minimal_steps(ctx: Context) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };

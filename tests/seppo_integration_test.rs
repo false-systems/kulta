@@ -252,6 +252,10 @@ async fn test_canary_full_lifecycle(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -382,6 +386,10 @@ async fn test_canary_pause_and_promote(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -477,6 +485,10 @@ async fn test_status_decisions_tracking(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -558,6 +570,10 @@ async fn test_blue_green_promotion(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -687,6 +703,10 @@ async fn test_blue_green_auto_promotion(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -775,6 +795,10 @@ async fn test_httproute_weight_updates(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -877,6 +901,10 @@ async fn test_simple_strategy_lifecycle(ctx: TestContext) {
                 blue_green: None,
                 simple: Some(SimpleStrategy { analysis: None }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -961,6 +989,10 @@ async fn test_image_update_triggers_rollout(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -1007,6 +1039,10 @@ async fn test_image_update_triggers_rollout(ctx: TestContext) {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };

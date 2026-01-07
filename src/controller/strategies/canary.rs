@@ -4,8 +4,8 @@
 
 use super::{reconcile_gateway_api_traffic, RolloutStrategy, StrategyError};
 use crate::controller::rollout::{
-    build_replicaset, calculate_replica_split, compute_desired_status, ensure_replicaset_exists,
-    Context,
+    build_replicaset, calculate_replica_split_with_surge, compute_desired_status,
+    ensure_replicaset_exists, Context,
 };
 use crate::crd::rollout::{Rollout, RolloutStatus};
 use async_trait::async_trait;
@@ -46,9 +46,13 @@ impl RolloutStrategy for CanaryStrategyHandler {
             .and_then(|s| s.current_weight)
             .unwrap_or(0);
 
-        // Calculate replica split based on weight
-        let (stable_replicas, canary_replicas) =
-            calculate_replica_split(rollout.spec.replicas, current_weight);
+        // Calculate replica split based on weight and surge settings
+        let (stable_replicas, canary_replicas) = calculate_replica_split_with_surge(
+            rollout.spec.replicas,
+            current_weight,
+            rollout.spec.max_surge.as_deref(),
+            rollout.spec.max_unavailable.as_deref(),
+        );
 
         info!(
             rollout = ?name,
@@ -158,6 +162,10 @@ mod tests {
                     }),
                     blue_green: None,
                 },
+
+                max_surge: None,
+                max_unavailable: None,
+                progress_deadline_seconds: None,
             },
             status: current_weight.map(|weight| crate::crd::rollout::RolloutStatus {
                 phase: Some(Phase::Progressing),

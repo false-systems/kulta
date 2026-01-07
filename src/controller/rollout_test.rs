@@ -46,6 +46,9 @@ fn create_test_rollout_with_simple() -> Rollout {
                 canary: None,
                 blue_green: None,
             },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     }
@@ -101,6 +104,9 @@ fn create_test_rollout_with_blue_green() -> Rollout {
                     analysis: None,
                 }),
             },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     }
@@ -250,6 +256,9 @@ fn create_test_rollout_with_canary() -> Rollout {
                     traffic_routing: None,
                 }),
             },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     }
@@ -312,6 +321,10 @@ async fn test_reconcile_creates_stable_replicaset() {
                     traffic_routing: None, // No HTTPRoute for ReplicaSet unit tests
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -423,6 +436,10 @@ async fn test_build_replicaset_spec() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -506,6 +523,10 @@ async fn test_reconcile_creates_canary_replicaset() {
                     traffic_routing: None, // No HTTPRoute for ReplicaSet unit tests
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -595,6 +616,10 @@ async fn test_replicaset_has_kulta_managed_label() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -710,6 +735,10 @@ async fn test_build_both_stable_and_canary_replicasets() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -839,6 +868,10 @@ async fn test_calculate_traffic_weights_step0() {
                     traffic_routing: None, // No HTTPRoute for ReplicaSet unit tests
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0), // First step: 20% canary
@@ -886,6 +919,10 @@ async fn test_calculate_traffic_weights_step1() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(1), // Second step: 50% canary
@@ -927,6 +964,10 @@ async fn test_calculate_traffic_weights_no_step() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None, // No status yet, default to 100% stable
     };
@@ -971,6 +1012,10 @@ async fn test_calculate_traffic_weights_complete() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(1), // Last step: 100% canary
@@ -1012,6 +1057,10 @@ async fn test_calculate_traffic_weights_beyond_steps() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(5), // Beyond available steps (only 1 step)
@@ -1053,6 +1102,10 @@ async fn test_build_httproute_backend_weights() {
                     traffic_routing: None, // No HTTPRoute for ReplicaSet unit tests
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0), // 20% canary
@@ -1112,6 +1165,10 @@ async fn test_convert_to_gateway_api_backend_refs() {
                     }),
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0), // 20% canary
@@ -1164,6 +1221,10 @@ async fn test_gateway_api_backend_refs_no_canary_strategy() {
                 blue_green: None,
                 canary: None,
             }, // No canary strategy
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None,
     };
@@ -1209,6 +1270,10 @@ async fn test_initialize_rollout_status() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None, // No status yet - should be initialized
     };
@@ -1263,6 +1328,10 @@ async fn test_should_progress_to_next_step() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1315,6 +1384,10 @@ async fn test_should_not_progress_when_paused() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1361,6 +1434,10 @@ async fn test_advance_to_next_step() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1419,6 +1496,10 @@ async fn test_advance_to_final_step() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1478,6 +1559,10 @@ async fn test_compute_desired_status_for_new_rollout() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: None, // No status - should be initialized
     };
@@ -1525,6 +1610,10 @@ async fn test_compute_desired_status_progresses_step() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1577,6 +1666,10 @@ async fn test_compute_desired_status_respects_pause() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -2722,6 +2815,10 @@ async fn test_evaluate_rollout_metrics_healthy() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -2801,6 +2898,10 @@ async fn test_evaluate_rollout_metrics_unhealthy() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -2865,6 +2966,10 @@ async fn test_evaluate_rollout_metrics_no_analysis_config() {
                     traffic_routing: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -2941,6 +3046,10 @@ async fn test_evaluate_rollout_metrics_skips_during_warmup() {
                 }),
                 blue_green: None,
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             replicas: 3,
@@ -3016,6 +3125,10 @@ async fn test_evaluate_rollout_metrics_runs_after_warmup() {
                 }),
                 blue_green: None,
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             replicas: 3,
@@ -3090,6 +3203,10 @@ async fn test_evaluate_rollout_metrics_no_warmup_configured() {
                 }),
                 blue_green: None,
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             replicas: 3,
@@ -3155,6 +3272,10 @@ async fn test_blue_green_builds_httproute_backend_refs() {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             phase: Some(Phase::Preview),
@@ -3225,6 +3346,10 @@ async fn test_blue_green_httproute_after_promotion() {
                     analysis: None,
                 }),
             },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
         },
         status: Some(RolloutStatus {
             phase: Some(Phase::Completed),

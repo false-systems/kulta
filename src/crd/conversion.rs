@@ -39,17 +39,18 @@ pub fn convert_to_v1beta1(spec: &v1alpha1::RolloutSpec) -> v1beta1::RolloutSpec 
 
 /// Convert v1beta1 RolloutSpec to v1alpha1
 ///
-/// Drops fields that don't exist in v1alpha1:
-/// - maxSurge
-/// - maxUnavailable
-/// - progressDeadlineSeconds
+/// v1alpha1 spec now includes v1beta1 fields as optional for internal use,
+/// but conceptually v1alpha1 doesn't expose them, so we set them to None.
 pub fn convert_to_v1alpha1(spec: &v1beta1::RolloutSpec) -> v1alpha1::RolloutSpec {
     v1alpha1::RolloutSpec {
         replicas: spec.replicas,
         selector: spec.selector.clone(),
         template: spec.template.clone(),
         strategy: spec.strategy.clone(),
-        // New v1beta1 fields are simply dropped
+        // v1beta1 fields are dropped for pure v1alpha1 representation
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: None,
     }
 }
 

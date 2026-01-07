@@ -14,6 +14,9 @@ fn test_v1alpha1_to_v1beta1_adds_default_max_surge() {
         selector: Default::default(),
         template: Default::default(),
         strategy: v1alpha1::RolloutStrategy::default(),
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: None,
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -30,6 +33,9 @@ fn test_v1alpha1_to_v1beta1_adds_default_max_unavailable() {
         selector: Default::default(),
         template: Default::default(),
         strategy: v1alpha1::RolloutStrategy::default(),
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: None,
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -46,6 +52,9 @@ fn test_v1alpha1_to_v1beta1_adds_default_progress_deadline() {
         selector: Default::default(),
         template: Default::default(),
         strategy: v1alpha1::RolloutStrategy::default(),
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: None,
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -75,6 +84,9 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
             }),
             blue_green: None,
         },
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: None,
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -162,6 +174,9 @@ fn test_roundtrip_v1alpha1_to_v1beta1_to_v1alpha1() {
             canary: None,
             blue_green: None,
         },
+        max_surge: None,
+        max_unavailable: None,
+        progress_deadline_seconds: None,
     };
 
     let converted = convert_to_v1beta1(&original);
