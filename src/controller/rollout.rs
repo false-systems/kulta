@@ -726,6 +726,7 @@ pub fn initialize_rollout_status(rollout: &Rollout) -> crate::crd::rollout::Roll
             first_step_weight
         )),
         pause_start_time,
+        progress_started_at: Some(Utc::now().to_rfc3339()),
         ..Default::default()
     }
 }
@@ -1326,6 +1327,65 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                     info!(rollout = ?name, "Rollout marked as Failed due to unhealthy metrics");
                     return Ok(Action::requeue(Duration::from_secs(30)));
                 }
+            }
+        }
+    }
+
+    // Check progress deadline (only for Progressing phase with deadline configured)
+    if let Some(deadline_seconds) = rollout.spec.progress_deadline_seconds {
+        if let Some(current_status) = &rollout.status {
+            if current_status.phase == Some(Phase::Progressing)
+                && is_progress_deadline_exceeded(current_status, deadline_seconds)
+            {
+                warn!(
+                    rollout = ?name,
+                    deadline_seconds = deadline_seconds,
+                    "Progress deadline exceeded, marking rollout as Failed"
+                );
+
+                let failed_status = RolloutStatus {
+                    phase: Some(Phase::Failed),
+                    message: Some(format!(
+                        "Progress deadline exceeded: no progress made in {} seconds",
+                        deadline_seconds
+                    )),
+                    ..current_status.clone()
+                };
+
+                // Emit rollback CDEvent (non-fatal)
+                if let Err(e) = emit_status_change_event(
+                    &rollout,
+                    &rollout.status,
+                    &failed_status,
+                    &ctx.cdevents_sink,
+                )
+                .await
+                {
+                    warn!(error = ?e, rollout = ?name, "Failed to emit deadline exceeded CDEvent (non-fatal)");
+                }
+
+                // Patch status to Failed
+                use kube::api::{Api, Patch, PatchParams};
+                let rollout_api: Api<Rollout> = Api::namespaced(ctx.client.clone(), &namespace);
+                rollout_api
+                    .patch_status(
+                        &name,
+                        &PatchParams::default(),
+                        &Patch::Merge(&serde_json::json!({
+                            "status": failed_status
+                        })),
+                    )
+                    .await?;
+
+                info!(rollout = ?name, "Rollout marked as Failed due to progress deadline exceeded");
+
+                // Record metrics for the failure
+                if let Some(ref metrics) = ctx.metrics {
+                    let duration_secs = start_time.elapsed().as_secs_f64();
+                    metrics.record_reconciliation_error(&name, duration_secs);
+                }
+
+                return Ok(Action::requeue(Duration::from_secs(30)));
             }
         }
     }

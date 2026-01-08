@@ -1295,6 +1295,58 @@ async fn test_initialize_rollout_status() {
 }
 
 #[tokio::test]
+async fn test_initialize_sets_progress_started_at() {
+    // When initializing a canary rollout, progress_started_at should be set
+    // This enables progress deadline detection
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                simple: None,
+                blue_green: None,
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    }],
+                    analysis: None,
+                    traffic_routing: None,
+                }),
+            },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
+        },
+        status: None,
+    };
+
+    let status = initialize_rollout_status(&rollout);
+
+    // progress_started_at should be set to a valid RFC3339 timestamp
+    assert!(
+        status.progress_started_at.is_some(),
+        "progress_started_at should be set on initialization"
+    );
+
+    // Verify it's a valid RFC3339 timestamp
+    let timestamp = status.progress_started_at.as_ref().unwrap();
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(timestamp).is_ok(),
+        "progress_started_at should be valid RFC3339"
+    );
+}
+
+#[tokio::test]
 async fn test_should_progress_to_next_step() {
     // Test that we detect when it's time to progress to the next step
     // For now: progress immediately (no pause, no analysis)
@@ -1460,6 +1512,64 @@ async fn test_advance_to_next_step() {
     assert_eq!(
         new_status.message,
         Some("Advanced to step 1 (50% traffic)".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_advance_preserves_progress_started_at() {
+    // When advancing to next step, progress_started_at should be preserved
+    let original_timestamp = "2024-01-15T10:30:00Z";
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("test-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                simple: None,
+                blue_green: None,
+                canary: Some(CanaryStrategy {
+                    canary_service: "test-app-canary".to_string(),
+                    stable_service: "test-app-stable".to_string(),
+                    steps: vec![
+                        CanaryStep {
+                            set_weight: Some(20),
+                            pause: None,
+                        },
+                        CanaryStep {
+                            set_weight: Some(50),
+                            pause: None,
+                        },
+                    ],
+                    analysis: None,
+                    traffic_routing: None,
+                }),
+            },
+
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
+        },
+        status: Some(RolloutStatus {
+            current_step_index: Some(0),
+            current_weight: Some(20),
+            phase: Some(Phase::Progressing),
+            progress_started_at: Some(original_timestamp.to_string()),
+            ..Default::default()
+        }),
+    };
+
+    let new_status = advance_to_next_step(&rollout);
+
+    // progress_started_at should be preserved
+    assert_eq!(
+        new_status.progress_started_at,
+        Some(original_timestamp.to_string()),
+        "progress_started_at should be preserved when advancing steps"
     );
 }
 
