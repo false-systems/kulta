@@ -1,5 +1,7 @@
 //! Tests for controller metrics
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use super::metrics::{create_metrics, ControllerMetrics};
 
 #[test]

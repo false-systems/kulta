@@ -2,6 +2,8 @@
 //!
 //! TDD: Tests written to verify certificate generation
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use super::tls::*;
 
 /// Test: Certificate bundle is generated successfully

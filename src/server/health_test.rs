@@ -2,6 +2,8 @@
 //!
 //! TDD Cycle 1: Health server responds to /healthz
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use super::*;
 use crate::server::create_metrics;
 use std::time::Duration;

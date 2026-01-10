@@ -2,6 +2,8 @@
 //!
 //! TDD: These tests are written FIRST, before the implementation.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use super::{convert_to_v1alpha1, convert_to_v1beta1};
 use crate::crd::v1alpha1;
 use crate::crd::v1beta1;

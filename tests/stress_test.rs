@@ -656,14 +656,14 @@ async fn test_chaos_conflicting_updates(ctx: Context) {
     wait_for_phase(&ctx, name, Phase::Progressing, 20).await;
 
     // Fire multiple conflicting updates concurrently
-    let update_futures: Vec<_> = (0..5)
+    let update_futures: Vec<_> = (0i32..5)
         .map(|i| {
             let ctx = &ctx;
             async move {
                 let r = create_rollout(
                     name,
                     &ctx.namespace,
-                    2 + i as i32,
+                    2 + i,
                     &format!("nginx:1.{}", 21 + i),
                 );
                 ctx.apply(&r).await
