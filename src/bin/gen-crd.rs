@@ -39,7 +39,7 @@ fn main() -> anyhow::Result<()> {
                     "name": "kulta-controller",
                     "namespace": "kulta-system",
                     "path": "/convert",
-                    "port": 8080
+                    "port": 8443
                 }
             },
             "conversionReviewVersions": ["v1"]

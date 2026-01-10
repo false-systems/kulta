@@ -120,6 +120,7 @@ fn build_router(readiness: ReadinessState, metrics: SharedMetrics) -> Router {
         .route("/readyz", get(readyz))
         .route("/metrics", get(self::metrics))
         .route("/convert", post(super::webhook::handle_convert))
+        .route("/validate", post(super::webhook::handle_validate))
         .with_state(state)
 }
 

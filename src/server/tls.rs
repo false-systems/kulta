@@ -321,13 +321,45 @@ pub async fn patch_crd_ca_bundle(
     Ok(())
 }
 
+/// Patch the ValidatingWebhookConfiguration with the CA bundle
+pub async fn patch_validating_webhook_ca_bundle(
+    client: &kube::Client,
+    ca_bundle_base64: &str,
+) -> Result<(), TlsError> {
+    use k8s_openapi::api::admissionregistration::v1::ValidatingWebhookConfiguration;
+    use kube::api::{Patch, PatchParams};
+    use kube::Api;
+
+    let webhooks: Api<ValidatingWebhookConfiguration> = Api::all(client.clone());
+
+    let patch = serde_json::json!({
+        "webhooks": [{
+            "name": "rollout.kulta.io",
+            "clientConfig": {
+                "caBundle": ca_bundle_base64
+            }
+        }]
+    });
+
+    webhooks
+        .patch(
+            "kulta-validating-webhook",
+            &PatchParams::default(),
+            &Patch::Merge(&patch),
+        )
+        .await?;
+
+    Ok(())
+}
+
 /// Initialize TLS certificates for the webhook
 ///
 /// This function:
 /// 1. Tries to load existing certs from a Secret
 /// 2. If not found, generates new certs
 /// 3. Saves the certs to a Secret
-/// 4. Patches the CRD with the CA bundle
+/// 4. Patches the CRD with the CA bundle (conversion webhook)
+/// 5. Patches the ValidatingWebhookConfiguration with the CA bundle
 ///
 /// Returns the certificate bundle for use by the HTTPS server.
 pub async fn initialize_tls(
@@ -339,20 +371,13 @@ pub async fn initialize_tls(
     use tracing::{info, warn};
 
     // Try to load existing certs
-    match load_from_secret(client, namespace, secret_name).await? {
+    let bundle = match load_from_secret(client, namespace, secret_name).await? {
         Some(bundle) => {
             info!(
                 secret = secret_name,
                 "Loaded existing TLS certificates from Secret"
             );
-
-            // Still patch the CRD in case it was recreated
-            let ca_bundle = bundle.ca_bundle_base64()?;
-            if let Err(e) = patch_crd_ca_bundle(client, &ca_bundle).await {
-                warn!(error = ?e, "Failed to patch CRD with CA bundle (may not exist yet)");
-            }
-
-            Ok(bundle)
+            bundle
         }
         None => {
             info!("No existing TLS certificates found, generating new ones");
@@ -363,16 +388,24 @@ pub async fn initialize_tls(
             // Save to Secret
             save_to_secret(client, namespace, secret_name, &bundle).await?;
             info!(secret = secret_name, "Saved new TLS certificates to Secret");
-
-            // Patch the CRD
-            let ca_bundle = bundle.ca_bundle_base64()?;
-            if let Err(e) = patch_crd_ca_bundle(client, &ca_bundle).await {
-                warn!(error = ?e, "Failed to patch CRD with CA bundle (may not exist yet)");
-            }
-
-            Ok(bundle)
+            bundle
         }
+    };
+
+    // Patch webhook configurations with CA bundle
+    let ca_bundle = bundle.ca_bundle_base64()?;
+
+    // Patch the CRD conversion webhook
+    if let Err(e) = patch_crd_ca_bundle(client, &ca_bundle).await {
+        warn!(error = ?e, "Failed to patch CRD with CA bundle (may not exist yet)");
     }
+
+    // Patch the ValidatingWebhookConfiguration
+    if let Err(e) = patch_validating_webhook_ca_bundle(client, &ca_bundle).await {
+        warn!(error = ?e, "Failed to patch ValidatingWebhookConfiguration with CA bundle (may not exist yet)");
+    }
+
+    Ok(bundle)
 }
 
 /// Build a rustls ServerConfig from the certificate bundle

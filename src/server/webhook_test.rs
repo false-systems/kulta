@@ -215,3 +215,193 @@ fn test_convert_unknown_version_fails() {
     assert_eq!(response.result.status, "Failed");
     assert!(response.result.message.is_some());
 }
+
+// ============================================================================
+// Validating Webhook Tests
+// ============================================================================
+
+use super::{validate_admission, AdmissionRequest};
+
+/// Test: Valid rollout is allowed
+#[test]
+fn test_validate_valid_rollout_allowed() {
+    let request = AdmissionRequest {
+        uid: "valid-uid".to_string(),
+        kind: super::GroupVersionKind {
+            group: "kulta.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "Rollout".to_string(),
+        },
+        name: Some("test-rollout".to_string()),
+        namespace: Some("default".to_string()),
+        operation: "CREATE".to_string(),
+        object: json!({
+            "apiVersion": "kulta.io/v1alpha1",
+            "kind": "Rollout",
+            "metadata": {"name": "test-rollout", "namespace": "default"},
+            "spec": {
+                "replicas": 3,
+                "selector": {"matchLabels": {"app": "test"}},
+                "template": {
+                    "metadata": {"labels": {"app": "test"}},
+                    "spec": {"containers": [{"name": "app", "image": "nginx"}]}
+                },
+                "strategy": {
+                    "canary": {
+                        "canaryService": "test-canary",
+                        "stableService": "test-stable",
+                        "steps": [{"setWeight": 20}]
+                    }
+                }
+            }
+        }),
+    };
+
+    let response = validate_admission(request);
+
+    assert!(response.allowed, "Valid rollout should be allowed");
+    assert_eq!(response.uid, "valid-uid");
+}
+
+/// Test: Invalid rollout with negative replicas is denied
+#[test]
+fn test_validate_negative_replicas_denied() {
+    let request = AdmissionRequest {
+        uid: "invalid-uid".to_string(),
+        kind: super::GroupVersionKind {
+            group: "kulta.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "Rollout".to_string(),
+        },
+        name: Some("test-rollout".to_string()),
+        namespace: Some("default".to_string()),
+        operation: "CREATE".to_string(),
+        object: json!({
+            "apiVersion": "kulta.io/v1alpha1",
+            "kind": "Rollout",
+            "metadata": {"name": "test-rollout", "namespace": "default"},
+            "spec": {
+                "replicas": -1,
+                "selector": {},
+                "template": {},
+                "strategy": {}
+            }
+        }),
+    };
+
+    let response = validate_admission(request);
+
+    assert!(!response.allowed, "Negative replicas should be denied");
+    assert!(response
+        .status
+        .as_ref()
+        .and_then(|s| s.message.as_ref())
+        .map(|m| m.contains("replicas"))
+        .unwrap_or(false));
+}
+
+/// Test: Invalid rollout with empty canary service is denied
+#[test]
+fn test_validate_empty_canary_service_denied() {
+    let request = AdmissionRequest {
+        uid: "empty-svc-uid".to_string(),
+        kind: super::GroupVersionKind {
+            group: "kulta.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "Rollout".to_string(),
+        },
+        name: Some("test-rollout".to_string()),
+        namespace: Some("default".to_string()),
+        operation: "CREATE".to_string(),
+        object: json!({
+            "apiVersion": "kulta.io/v1alpha1",
+            "kind": "Rollout",
+            "metadata": {"name": "test-rollout", "namespace": "default"},
+            "spec": {
+                "replicas": 3,
+                "selector": {},
+                "template": {},
+                "strategy": {
+                    "canary": {
+                        "canaryService": "",
+                        "stableService": "test-stable",
+                        "steps": [{"setWeight": 20}]
+                    }
+                }
+            }
+        }),
+    };
+
+    let response = validate_admission(request);
+
+    assert!(!response.allowed, "Empty canary service should be denied");
+    assert!(response
+        .status
+        .as_ref()
+        .and_then(|s| s.message.as_ref())
+        .map(|m| m.contains("canaryService"))
+        .unwrap_or(false));
+}
+
+/// Test: Invalid rollout with weight > 100 is denied
+#[test]
+fn test_validate_weight_out_of_range_denied() {
+    let request = AdmissionRequest {
+        uid: "weight-uid".to_string(),
+        kind: super::GroupVersionKind {
+            group: "kulta.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "Rollout".to_string(),
+        },
+        name: Some("test-rollout".to_string()),
+        namespace: Some("default".to_string()),
+        operation: "CREATE".to_string(),
+        object: json!({
+            "apiVersion": "kulta.io/v1alpha1",
+            "kind": "Rollout",
+            "metadata": {"name": "test-rollout", "namespace": "default"},
+            "spec": {
+                "replicas": 3,
+                "selector": {},
+                "template": {},
+                "strategy": {
+                    "canary": {
+                        "canaryService": "test-canary",
+                        "stableService": "test-stable",
+                        "steps": [{"setWeight": 150}]
+                    }
+                }
+            }
+        }),
+    };
+
+    let response = validate_admission(request);
+
+    assert!(!response.allowed, "Weight > 100 should be denied");
+}
+
+/// Test: Validation handles malformed JSON gracefully
+#[test]
+fn test_validate_malformed_object_denied() {
+    let request = AdmissionRequest {
+        uid: "malformed-uid".to_string(),
+        kind: super::GroupVersionKind {
+            group: "kulta.io".to_string(),
+            version: "v1alpha1".to_string(),
+            kind: "Rollout".to_string(),
+        },
+        name: Some("test-rollout".to_string()),
+        namespace: Some("default".to_string()),
+        operation: "CREATE".to_string(),
+        object: json!({
+            "apiVersion": "kulta.io/v1alpha1",
+            "kind": "Rollout",
+            "metadata": {"name": "test-rollout"},
+            // Missing required spec field
+        }),
+    };
+
+    let response = validate_admission(request);
+
+    assert!(!response.allowed, "Malformed rollout should be denied");
+}

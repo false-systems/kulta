@@ -1142,7 +1142,14 @@ fn build_replicaset_for_blue_green_type(
 /// Validate Rollout specification
 ///
 /// Validates runtime constraints that cannot be enforced via CRD schema.
-/// This is necessary because our current CRD uses x-kubernetes-preserve-unknown-fields.
+/// Used by both the reconcile loop (runtime) and the validating webhook (admission).
+///
+/// # Validation Rules
+/// - `spec.replicas` must be >= 0
+/// - Canary strategy: `canaryService` and `stableService` cannot be empty
+/// - Canary strategy: `steps` must have at least one step
+/// - Each step's `setWeight` must be 0-100
+/// - `pause.duration` must be valid format (e.g., "30s", "5m")
 ///
 /// # Arguments
 /// * `rollout` - The Rollout resource to validate
@@ -1150,7 +1157,7 @@ fn build_replicaset_for_blue_green_type(
 /// # Returns
 /// * `Ok(())` - Validation passed
 /// * `Err(String)` - Validation error message
-fn validate_rollout(rollout: &Rollout) -> Result<(), String> {
+pub fn validate_rollout(rollout: &Rollout) -> Result<(), String> {
     // Validate replicas >= 0
     if rollout.spec.replicas < 0 {
         return Err(format!(

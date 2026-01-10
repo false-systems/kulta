@@ -31,6 +31,13 @@ spec:
         # Leader election (enable for multi-replica HA deployments)
         - name: KULTA_LEADER_ELECTION
           value: "false"  # Set to "true" for HA with replicas > 1
+        # Webhook TLS (required for validating/conversion webhooks)
+        - name: KULTA_WEBHOOK_TLS
+          value: "true"
+        - name: KULTA_SERVICE_NAME
+          value: "kulta-controller"
+        - name: KULTA_NAMESPACE
+          value: "kulta-system"
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -42,6 +49,9 @@ spec:
         ports:
         - name: health
           containerPort: 8080
+          protocol: TCP
+        - name: webhook
+          containerPort: 8443
           protocol: TCP
         - name: metrics
           containerPort: 9090
@@ -81,6 +91,10 @@ spec:
   - name: health
     port: 8080
     targetPort: 8080
+    protocol: TCP
+  - name: webhook
+    port: 8443
+    targetPort: 8443
     protocol: TCP
   - name: metrics
     port: 9090

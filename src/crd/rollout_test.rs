@@ -278,7 +278,7 @@ fn test_crd_matches_deployed_yaml() {
                     "name": "kulta-controller",
                     "namespace": "kulta-system",
                     "path": "/convert",
-                    "port": 8080
+                    "port": 8443
                 }
             },
             "conversionReviewVersions": ["v1"]

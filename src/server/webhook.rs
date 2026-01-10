@@ -1,14 +1,22 @@
-//! CRD Conversion Webhook for Rollout resources
+//! CRD Webhooks for Rollout resources
 //!
-//! Handles conversion between v1alpha1 and v1beta1 versions of the Rollout CRD.
-//! Kubernetes calls this webhook when it needs to convert between versions.
+//! Handles conversion and validation of Rollout CRD resources.
+//! Kubernetes calls these webhooks during CRD operations.
 //!
 //! ## Endpoints
-//! - POST /convert - Kubernetes ConversionReview webhook
+//! - POST /convert - Kubernetes ConversionReview webhook (version conversion)
+//! - POST /validate - Kubernetes AdmissionReview webhook (validation)
 //!
 //! ## Conversion Rules
 //! - v1alpha1 -> v1beta1: Add defaults for maxSurge, maxUnavailable, progressDeadlineSeconds
 //! - v1beta1 -> v1alpha1: Drop new fields
+//!
+//! ## Validation Rules
+//! - spec.replicas must be >= 0
+//! - canary.canaryService and stableService cannot be empty
+//! - canary.steps must have at least one step
+//! - step.setWeight must be 0-100
+//! - pause.duration must be valid format
 
 use axum::{http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
@@ -235,6 +243,157 @@ pub async fn handle_convert(Json(review): Json<ConversionReview>) -> impl IntoRe
     let review_response = ConversionReviewResponse {
         api_version: "apiextensions.k8s.io/v1".to_string(),
         kind: "ConversionReview".to_string(),
+        response,
+    };
+
+    (StatusCode::OK, Json(review_response))
+}
+
+// ============================================================================
+// Validating Admission Webhook
+// ============================================================================
+
+/// Kubernetes AdmissionReview request for validation
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdmissionReview {
+    pub api_version: String,
+    pub kind: String,
+    pub request: AdmissionRequest,
+}
+
+/// The actual admission request from Kubernetes
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdmissionRequest {
+    /// Unique ID for this request
+    pub uid: String,
+    /// Kind of object being validated
+    pub kind: GroupVersionKind,
+    /// Name of the object (may be empty for CREATE)
+    pub name: Option<String>,
+    /// Namespace of the object
+    pub namespace: Option<String>,
+    /// Operation being performed (CREATE, UPDATE, DELETE)
+    pub operation: String,
+    /// The object being validated
+    pub object: Value,
+}
+
+/// Group/Version/Kind identifier
+#[derive(Debug, Deserialize)]
+pub struct GroupVersionKind {
+    pub group: String,
+    pub version: String,
+    pub kind: String,
+}
+
+/// Response status for validation
+#[derive(Debug, Serialize)]
+pub struct AdmissionStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Response for an admission request
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdmissionResponse {
+    pub uid: String,
+    pub allowed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<AdmissionStatus>,
+}
+
+/// Full AdmissionReview response
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdmissionReviewResponse {
+    pub api_version: String,
+    pub kind: String,
+    pub response: AdmissionResponse,
+}
+
+/// Validate a Rollout spec from JSON
+///
+/// This function deserializes the JSON into a Rollout and validates it.
+fn validate_rollout_from_json(object: &Value) -> Result<(), String> {
+    use crate::crd::rollout::Rollout;
+
+    // Deserialize the object into a Rollout
+    let rollout: Rollout = serde_json::from_value(object.clone())
+        .map_err(|e| format!("Failed to parse Rollout: {}", e))?;
+
+    // Use the existing validation logic
+    crate::controller::rollout::validate_rollout(&rollout)
+}
+
+/// Validate an admission request
+pub fn validate_admission(request: AdmissionRequest) -> AdmissionResponse {
+    let object_name = request.name.as_deref().unwrap_or("unknown");
+    let object_ns = request.namespace.as_deref().unwrap_or("default");
+
+    // Only validate Rollout resources
+    if request.kind.kind != "Rollout" || request.kind.group != "kulta.io" {
+        // Allow non-Rollout resources (shouldn't happen with proper webhook config)
+        return AdmissionResponse {
+            uid: request.uid,
+            allowed: true,
+            status: None,
+        };
+    }
+
+    // Validate the Rollout
+    match validate_rollout_from_json(&request.object) {
+        Ok(()) => {
+            info!(
+                name = %object_name,
+                namespace = %object_ns,
+                operation = %request.operation,
+                "Rollout validation passed"
+            );
+            AdmissionResponse {
+                uid: request.uid,
+                allowed: true,
+                status: None,
+            }
+        }
+        Err(validation_error) => {
+            warn!(
+                name = %object_name,
+                namespace = %object_ns,
+                operation = %request.operation,
+                error = %validation_error,
+                "Rollout validation failed"
+            );
+            AdmissionResponse {
+                uid: request.uid,
+                allowed: false,
+                status: Some(AdmissionStatus {
+                    code: Some(400),
+                    message: Some(validation_error),
+                }),
+            }
+        }
+    }
+}
+
+/// Axum handler for the /validate endpoint
+pub async fn handle_validate(Json(review): Json<AdmissionReview>) -> impl IntoResponse {
+    info!(
+        uid = %review.request.uid,
+        kind = %review.request.kind.kind,
+        operation = %review.request.operation,
+        "Processing validation request"
+    );
+
+    let response = validate_admission(review.request);
+
+    let review_response = AdmissionReviewResponse {
+        api_version: "admission.k8s.io/v1".to_string(),
+        kind: "AdmissionReview".to_string(),
         response,
     };
 
