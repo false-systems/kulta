@@ -322,6 +322,9 @@ pub async fn patch_crd_ca_bundle(
 }
 
 /// Patch the ValidatingWebhookConfiguration with the CA bundle
+///
+/// Uses JSON Patch (RFC 6902) to target the specific webhook at index 0,
+/// avoiding issues with strategic merge patch on arrays.
 pub async fn patch_validating_webhook_ca_bundle(
     client: &kube::Client,
     ca_bundle_base64: &str,
@@ -332,20 +335,24 @@ pub async fn patch_validating_webhook_ca_bundle(
 
     let webhooks: Api<ValidatingWebhookConfiguration> = Api::all(client.clone());
 
-    let patch = serde_json::json!({
-        "webhooks": [{
-            "name": "rollout.kulta.io",
-            "clientConfig": {
-                "caBundle": ca_bundle_base64
-            }
-        }]
-    });
+    // Use JSON Patch to target the first webhook's caBundle specifically
+    // This is more reliable than strategic merge patch for arrays
+    let patch = serde_json::json!([
+        {
+            "op": "replace",
+            "path": "/webhooks/0/clientConfig/caBundle",
+            "value": ca_bundle_base64
+        }
+    ]);
 
     webhooks
         .patch(
             "kulta-validating-webhook",
             &PatchParams::default(),
-            &Patch::Merge(&patch),
+            &Patch::Json::<()>(
+                serde_json::from_value(patch)
+                    .map_err(|e| TlsError::Kube(kube::Error::SerdeError(e)))?,
+            ),
         )
         .await?;
 

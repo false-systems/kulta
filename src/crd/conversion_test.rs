@@ -108,9 +108,9 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
     assert_eq!(canary.steps[0].set_weight, Some(20));
 }
 
-/// Test: v1beta1 -> v1alpha1 drops new fields
+/// Test: v1beta1 -> v1alpha1 preserves v1beta1 fields for internal use
 #[test]
-fn test_v1beta1_to_v1alpha1_drops_new_fields() {
+fn test_v1beta1_to_v1alpha1_preserves_v1beta1_fields() {
     let v1beta1_spec = v1beta1::RolloutSpec {
         replicas: 3,
         selector: Default::default(),
@@ -123,10 +123,11 @@ fn test_v1beta1_to_v1alpha1_drops_new_fields() {
 
     let v1alpha1_spec = convert_to_v1alpha1(&v1beta1_spec);
 
-    // v1alpha1 doesn't have these fields, so they're dropped
-    // The struct simply won't have them - this test verifies it compiles
-    // and preserves the fields that DO exist
+    // v1alpha1 now preserves v1beta1 fields for internal use and round-trip safety
     assert_eq!(v1alpha1_spec.replicas, 3);
+    assert_eq!(v1alpha1_spec.max_surge, Some("50%".to_string()));
+    assert_eq!(v1alpha1_spec.max_unavailable, Some("1".to_string()));
+    assert_eq!(v1alpha1_spec.progress_deadline_seconds, Some(300));
 }
 
 /// Test: v1beta1 -> v1alpha1 preserves existing fields
@@ -189,7 +190,7 @@ fn test_roundtrip_v1alpha1_to_v1beta1_to_v1alpha1() {
 }
 
 /// Test: Round-trip conversion preserves data (v1beta1 -> v1alpha1 -> v1beta1)
-/// Note: New fields are lost in this direction
+/// v1beta1 fields are now preserved through v1alpha1 to avoid data loss
 #[test]
 fn test_roundtrip_v1beta1_to_v1alpha1_to_v1beta1() {
     let original = v1beta1::RolloutSpec {
@@ -208,8 +209,8 @@ fn test_roundtrip_v1beta1_to_v1alpha1_to_v1beta1() {
     // Replicas preserved
     assert_eq!(back.replicas, original.replicas);
 
-    // New fields get DEFAULT values (not original) because v1alpha1 doesn't have them
-    assert_eq!(back.max_surge, Some("25%".to_string())); // default, not "50%"
-    assert_eq!(back.max_unavailable, Some("0".to_string())); // default, not "2"
-    assert_eq!(back.progress_deadline_seconds, Some(600)); // default, not 900
+    // v1beta1 fields are now preserved through round-trip conversion
+    assert_eq!(back.max_surge, Some("50%".to_string()));
+    assert_eq!(back.max_unavailable, Some("2".to_string()));
+    assert_eq!(back.progress_deadline_seconds, Some(900));
 }

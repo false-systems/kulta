@@ -211,29 +211,52 @@ pub fn calculate_replica_split(total_replicas: i32, canary_weight: i32) -> (i32,
     (stable_replicas, canary_replicas)
 }
 
+/// Validate surge/unavailable value format
+///
+/// Returns true if the value is a valid format:
+/// - Percentage: "0%" to "100%" (non-negative)
+/// - Absolute: non-negative integer
+fn is_valid_surge_format(value: &str) -> bool {
+    if let Some(percent_str) = value.strip_suffix('%') {
+        match percent_str.parse::<i32>() {
+            Ok(percent) => (0..=100).contains(&percent),
+            Err(_) => false,
+        }
+    } else {
+        match value.parse::<i32>() {
+            Ok(abs) => abs >= 0,
+            Err(_) => false,
+        }
+    }
+}
+
 /// Parse a surge value (percentage like "25%" or absolute like "5")
 ///
 /// Returns the absolute number of pods based on total_replicas.
-/// Invalid values return 0.
+/// Invalid values (negative, out of range, or malformed) return 0.
 ///
 /// # Examples
 /// ```ignore
 /// assert_eq!(parse_surge_value("25%", 10), 3);  // 25% of 10 = 2.5 -> ceil = 3
 /// assert_eq!(parse_surge_value("5", 10), 5);   // absolute 5
 /// assert_eq!(parse_surge_value("0%", 10), 0);  // 0%
+/// assert_eq!(parse_surge_value("-5", 10), 0);  // negative -> 0
 /// ```
 pub fn parse_surge_value(value: &str, total_replicas: i32) -> i32 {
     if let Some(percent_str) = value.strip_suffix('%') {
-        // Percentage value
+        // Percentage value - must be 0-100
         match percent_str.parse::<i32>() {
             Ok(percent) if (0..=100).contains(&percent) => {
                 ((total_replicas as f64 * percent as f64) / 100.0).ceil() as i32
             }
-            _ => 0,
+            _ => 0, // Invalid percentage (negative, >100, or parse error)
         }
     } else {
-        // Absolute value
-        value.parse::<i32>().unwrap_or(0).max(0)
+        // Absolute value - must be non-negative
+        match value.parse::<i32>() {
+            Ok(abs) if abs >= 0 => abs,
+            _ => 0, // Negative or parse error
+        }
     }
 }
 
@@ -268,22 +291,37 @@ pub fn calculate_replica_split_with_surge(
         ((total_replicas as f64 * canary_weight as f64) / 100.0).ceil() as i32
     };
 
-    // With surge, we can keep more stable replicas during transition
-    // stable = total_replicas (keep all stable) while scaling up canary
+    // With surge, we can keep more replicas during transition
     // Total max = total_replicas + surge
     let max_total = total_replicas + surge;
     let min_total = (total_replicas - unavailable).max(0);
 
-    // During rollout: keep stable at full count, add canary pods up to surge limit
-    let canary_replicas = ideal_canary.min(max_total - total_replicas + ideal_canary);
-    let stable_replicas = (total_replicas - ideal_canary).max(min_total - canary_replicas);
+    // Start from the ideal split based on weight
+    let mut canary_replicas = ideal_canary;
+    let mut stable_replicas = (total_replicas - ideal_canary).max(0);
 
-    // Ensure we don't exceed max or go below min
-    let total = stable_replicas + canary_replicas;
+    // Ensure we don't exceed the maximum allowed replicas
+    let mut total = stable_replicas + canary_replicas;
     if total > max_total {
-        // Scale down stable if we exceed max
-        let excess = total - max_total;
-        return ((stable_replicas - excess).max(0), canary_replicas);
+        let mut excess = total - max_total;
+
+        // Prefer scaling down canary replicas first (they're the new deployment)
+        let canary_reduction = canary_replicas.min(excess);
+        canary_replicas -= canary_reduction;
+        excess -= canary_reduction;
+
+        // If still exceeding, scale down stable replicas
+        if excess > 0 {
+            stable_replicas = (stable_replicas - excess).max(0);
+        }
+    }
+
+    // Ensure we don't go below the minimum required replicas
+    total = stable_replicas + canary_replicas;
+    if total < min_total {
+        let deficit = min_total - total;
+        // Prefer adding stable replicas to satisfy availability constraints
+        stable_replicas += deficit;
     }
 
     (stable_replicas, canary_replicas)
@@ -1224,6 +1262,34 @@ pub fn validate_rollout(rollout: &Rollout) -> Result<(), String> {
         }
     }
 
+    // Validate v1beta1 fields if present
+    if let Some(max_surge) = &rollout.spec.max_surge {
+        if !is_valid_surge_format(max_surge) {
+            return Err(format!(
+                "spec.maxSurge invalid format '{}': must be percentage (e.g., '25%') or absolute number (e.g., '5')",
+                max_surge
+            ));
+        }
+    }
+
+    if let Some(max_unavailable) = &rollout.spec.max_unavailable {
+        if !is_valid_surge_format(max_unavailable) {
+            return Err(format!(
+                "spec.maxUnavailable invalid format '{}': must be percentage (e.g., '25%') or absolute number (e.g., '0')",
+                max_unavailable
+            ));
+        }
+    }
+
+    if let Some(deadline) = rollout.spec.progress_deadline_seconds {
+        if deadline < 0 {
+            return Err(format!(
+                "spec.progressDeadlineSeconds must be >= 0, got {}",
+                deadline
+            ));
+        }
+    }
+
     Ok(())
 }
 
@@ -1338,10 +1404,11 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         }
     }
 
-    // Check progress deadline (only for Progressing phase with deadline configured)
+    // Check progress deadline (for Progressing or Preview phases with deadline configured)
     if let Some(deadline_seconds) = rollout.spec.progress_deadline_seconds {
         if let Some(current_status) = &rollout.status {
-            if current_status.phase == Some(Phase::Progressing)
+            if (current_status.phase == Some(Phase::Progressing)
+                || current_status.phase == Some(Phase::Preview))
                 && is_progress_deadline_exceeded(current_status, deadline_seconds)
             {
                 warn!(
