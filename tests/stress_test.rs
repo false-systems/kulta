@@ -660,12 +660,7 @@ async fn test_chaos_conflicting_updates(ctx: Context) {
         .map(|i| {
             let ctx = &ctx;
             async move {
-                let r = create_rollout(
-                    name,
-                    &ctx.namespace,
-                    2 + i,
-                    &format!("nginx:1.{}", 21 + i),
-                );
+                let r = create_rollout(name, &ctx.namespace, 2 + i, &format!("nginx:1.{}", 21 + i));
                 ctx.apply(&r).await
             }
         })
