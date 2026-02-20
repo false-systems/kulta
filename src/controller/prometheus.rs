@@ -224,10 +224,15 @@ impl MetricsQuerier for HttpPrometheusClient {
 }
 
 /// Mock Prometheus client for testing
+///
+/// Supports two modes:
+/// - Single response: `set_mock_response()` sets one response returned for all queries
+/// - Response queue: `enqueue_response()` / `enqueue_error()` for sequential multi-query tests
 #[cfg(test)]
 #[derive(Clone)]
 pub struct MockPrometheusClient {
     mock_response: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    response_queue: std::sync::Arc<std::sync::Mutex<Vec<Result<f64, PrometheusError>>>>,
 }
 
 #[cfg(test)]
@@ -242,12 +247,27 @@ impl MockPrometheusClient {
     pub fn new() -> Self {
         Self {
             mock_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            response_queue: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
     pub fn set_mock_response(&self, response: String) {
         if let Ok(mut mock) = self.mock_response.lock() {
             *mock = Some(response);
+        }
+    }
+
+    /// Enqueue a successful value to be returned by the next `query_instant` call
+    pub fn enqueue_response(&self, value: f64) {
+        if let Ok(mut queue) = self.response_queue.lock() {
+            queue.push(Ok(value));
+        }
+    }
+
+    /// Enqueue an error to be returned by the next `query_instant` call
+    pub fn enqueue_error(&self, error: PrometheusError) {
+        if let Ok(mut queue) = self.response_queue.lock() {
+            queue.push(Err(error));
         }
     }
 }
@@ -260,6 +280,13 @@ impl MetricsQuerier for MockPrometheusClient {
     }
 
     async fn query_instant(&self, _query: &str) -> Result<f64, PrometheusError> {
+        // If queue has entries, use FIFO order
+        if let Ok(mut queue) = self.response_queue.lock() {
+            if !queue.is_empty() {
+                return queue.remove(0);
+            }
+        }
+        // Fall back to single mock response
         let mock = self
             .mock_response
             .lock()

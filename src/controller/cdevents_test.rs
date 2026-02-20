@@ -748,6 +748,175 @@ async fn test_blue_green_emits_published_on_promotion() {
     assert_eq!(kulta["strategy"], "blue-green");
 }
 
+// Test A/B experiment concluded event (Experimenting → Concluded)
+#[tokio::test]
+async fn test_emit_experiment_concluded_event() {
+    use crate::crd::rollout::{
+        ABConclusionReason, ABExperimentStatus, ABHeaderMatch, ABMatch, ABMetricResult, ABStrategy,
+        ABVariant,
+    };
+
+    let sink = MockEventSink::new();
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("ab-app".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: Default::default(),
+            template: create_test_pod_template("nginx:2.0"),
+            strategy: RolloutStrategy {
+                simple: None,
+                blue_green: None,
+                canary: None,
+                ab_testing: Some(ABStrategy {
+                    variant_a_service: "svc-a".to_string(),
+                    variant_b_service: "svc-b".to_string(),
+                    port: None,
+                    variant_b_match: ABMatch {
+                        header: Some(ABHeaderMatch {
+                            name: "X-Variant".to_string(),
+                            value: "B".to_string(),
+                            match_type: None,
+                        }),
+                        cookie: None,
+                    },
+                    traffic_routing: None,
+                    max_duration: None,
+                    analysis: None,
+                }),
+            },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
+        },
+        status: Some(RolloutStatus {
+            phase: Some(Phase::Experimenting),
+            ..Default::default()
+        }),
+    };
+
+    let new_status = RolloutStatus {
+        phase: Some(Phase::Concluded),
+        ab_experiment: Some(ABExperimentStatus {
+            started_at: "2025-01-01T00:00:00Z".to_string(),
+            concluded_at: Some("2025-01-01T02:00:00Z".to_string()),
+            sample_size_a: Some(5000),
+            sample_size_b: Some(5000),
+            results: vec![ABMetricResult {
+                name: "error-rate".to_string(),
+                value_a: 0.05,
+                value_b: 0.02,
+                confidence: 0.98,
+                is_significant: true,
+                winner: Some(ABVariant::B),
+            }],
+            winner: Some(ABVariant::B),
+            conclusion_reason: Some(ABConclusionReason::ConsensusReached),
+        }),
+        ..Default::default()
+    };
+
+    let old_status = rollout.status.clone();
+    emit_status_change_event(&rollout, &old_status, &new_status, &sink)
+        .await
+        .unwrap();
+
+    let events = sink.get_emitted_events();
+    assert_eq!(events.len(), 1, "Should emit one event");
+
+    // Verify it's a service.published event (experiment concluded uses this type)
+    let event = &events[0];
+    use cloudevents::AttributesReader;
+    assert!(
+        event.ty().contains("service.published"),
+        "Expected service.published, got: {}",
+        event.ty()
+    );
+
+    // Verify custom data
+    let data = event.data().expect("Event should have data");
+    let json: serde_json::Value = match data {
+        cloudevents::Data::Json(v) => v.clone(),
+        _ => panic!("Expected JSON data"),
+    };
+    let kulta = &json["customData"]["kulta"];
+    assert_eq!(kulta["strategy"], "ab-testing");
+    assert_eq!(kulta["experiment"]["winner"], "B");
+    assert_eq!(
+        kulta["experiment"]["conclusion_reason"],
+        "ConsensusReached"
+    );
+    assert_eq!(kulta["experiment"]["sample_size_a"], 5000);
+    assert!(!kulta["experiment"]["metrics"].as_array().unwrap().is_empty());
+}
+
+// Test A/B initialization event (None → Experimenting = service.deployed)
+#[tokio::test]
+async fn test_emit_service_deployed_on_ab_initialization() {
+    use crate::crd::rollout::{ABHeaderMatch, ABMatch, ABStrategy};
+
+    let sink = MockEventSink::new();
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("ab-init".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 2,
+            selector: Default::default(),
+            template: create_test_pod_template("nginx:1.0"),
+            strategy: RolloutStrategy {
+                simple: None,
+                blue_green: None,
+                canary: None,
+                ab_testing: Some(ABStrategy {
+                    variant_a_service: "svc-a".to_string(),
+                    variant_b_service: "svc-b".to_string(),
+                    port: None,
+                    variant_b_match: ABMatch {
+                        header: Some(ABHeaderMatch {
+                            name: "X-Variant".to_string(),
+                            value: "B".to_string(),
+                            match_type: None,
+                        }),
+                        cookie: None,
+                    },
+                    traffic_routing: None,
+                    max_duration: None,
+                    analysis: None,
+                }),
+            },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
+        },
+        status: None, // No previous status → initialization
+    };
+
+    let new_status = RolloutStatus {
+        phase: Some(Phase::Experimenting),
+        ..Default::default()
+    };
+
+    let old_status = rollout.status.clone();
+    emit_status_change_event(&rollout, &old_status, &new_status, &sink)
+        .await
+        .unwrap();
+
+    let events = sink.get_emitted_events();
+    assert_eq!(events.len(), 1, "Should emit service.deployed");
+    use cloudevents::AttributesReader;
+    assert!(
+        events[0].ty().contains("service.deployed"),
+        "Expected service.deployed, got: {}",
+        events[0].ty()
+    );
+}
+
 // Helper to create test pod template
 fn create_test_pod_template(image: &str) -> k8s_openapi::api::core::v1::PodTemplateSpec {
     use k8s_openapi::api::core::v1::{Container, PodSpec, PodTemplateSpec};

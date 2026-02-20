@@ -570,6 +570,33 @@ mod tests {
     }
 
     #[test]
+    fn test_emit_occurrence_skips_missing_namespace() {
+        let mut rollout = test_rollout();
+        rollout.metadata.namespace = None;
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(Utc::now()));
+
+        // Should not panic — logs warning and returns
+        emit_occurrence(&rollout, None, &Phase::Progressing, "canary", &clock);
+    }
+
+    #[test]
+    fn test_phase_to_occurrence_suffix_initializing() {
+        // Initializing maps to "progressing" (catch-all)
+        assert_eq!(
+            phase_to_occurrence_suffix(None, &Phase::Initializing),
+            "progressing"
+        );
+    }
+
+    #[test]
+    fn test_phase_to_occurrence_suffix_experimenting() {
+        assert_eq!(
+            phase_to_occurrence_suffix(None, &Phase::Experimenting),
+            "progressing"
+        );
+    }
+
+    #[test]
     fn test_build_occurrence_failed_with_custom_message() {
         let mut rollout = test_rollout();
         rollout.status = Some(crate::crd::rollout::RolloutStatus {

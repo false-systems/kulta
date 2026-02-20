@@ -4,7 +4,7 @@
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](https://www.rust-lang.org)
-[![Tests](https://img.shields.io/badge/tests-168%2B-green.svg)]()
+[![Tests](https://img.shields.io/badge/tests-294%2B-green.svg)]()
 
 A Kubernetes controller for progressive delivery, written in Rust. Built to learn Kubernetes controllers, Rust async, and progressive delivery patterns.
 
@@ -25,10 +25,12 @@ A Kubernetes controller for progressive delivery, written in Rust. Built to lear
 |---------|-------------|
 | **Canary Deployments** | Gradual traffic shifting (0% -> 20% -> 50% -> 100%) with configurable steps |
 | **Blue-Green Deployments** | Instant traffic cutover between two full environments |
+| **A/B Testing** | Statistical significance analysis (Z-test) with header/cookie-based routing |
 | **Simple Rolling Updates** | Standard Kubernetes rolling update with observability |
 | **Gateway API Traffic Routing** | Native HTTPRoute weight-based traffic splitting (no service mesh required) |
 | **Metrics-Based Rollback** | Automatic rollback via Prometheus (error rate, latency thresholds) |
 | **CDEvents Observability** | CNCF-standard deployment events for pipeline integration |
+| **FALSE Protocol** | AI-native occurrence emission for AIOps tooling (AHTI/Kerto) |
 | **Leader Election** | HA-ready with Kubernetes Lease-based leader election |
 | **Time-Based Pauses** | Configurable wait durations between steps ("5m", "30s") |
 | **Manual Promotion** | Annotation-based promotion for indefinite pauses |
@@ -57,7 +59,7 @@ kubectl apply -f deploy/
 ```
 
 **Requirements:**
-- Rust 1.83+
+- Rust 1.85+
 - Kubernetes 1.28+
 - Gateway API v1.0+ CRDs installed
 - A Gateway API implementation (Envoy Gateway, NGINX Gateway Fabric, Contour, etc.)
@@ -415,7 +417,7 @@ Uses Kubernetes Lease resources for distributed consensus:
 # Build
 cargo build --release
 
-# Run tests (168+ test cases)
+# Run tests (294+ test cases)
 cargo test
 
 # Run with verbose output
@@ -499,7 +501,7 @@ kulta/
 | Metrics Analysis | Prometheus | Prometheus/Datadog/etc | Prometheus/Datadog/etc |
 | Blue-Green | Yes | Yes | Yes |
 | Canary | Yes | Yes | Yes |
-| A/B Testing | Planned | Yes | Yes |
+| A/B Testing | Yes | Yes | Yes |
 
 ---
 
