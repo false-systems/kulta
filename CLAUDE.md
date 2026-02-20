@@ -9,15 +9,18 @@
 **What's Implemented:**
 - Canary deployments with step-based traffic shifting
 - Blue-green deployments with instant cutover
+- A/B testing with statistical significance analysis (Z-test)
 - Simple rolling updates with observability
 - Gateway API HTTPRoute traffic management
 - Prometheus metrics-based automated rollback
-- CDEvents emission (service.deployed, upgraded, published, rolledback)
+- CDEvents emission (service.deployed, upgraded, published, rolledback, experiment.concluded)
+- FALSE Protocol occurrence emission for AIOps observability
+- Clock abstraction + trait-based dependency injection
 - Leader election for HA deployments
-- 168+ test cases
+- 294+ test cases
 
 **Code Stats:**
-- ~10,000 lines of Rust
+- ~12,000 lines of Rust
 - Strategy Pattern for deployment types
 - No `.unwrap()` in production code
 - Proper error types throughout
@@ -34,14 +37,23 @@
 │  └── Bootstrap: tracing, health server, leader election, controller     │
 │                                                                          │
 │  controller/                                                             │
-│  ├── rollout.rs        # Main reconciliation loop                       │
+│  ├── rollout/          # Reconciliation (split from rollout.rs)         │
+│  │   ├── reconcile.rs  # Main reconcile loop + Context                  │
+│  │   ├── replicaset.rs # ReplicaSet building + hashing                  │
+│  │   ├── status.rs     # Phase state machine + status computation       │
+│  │   ├── traffic.rs    # Gateway API HTTPRoute weights                  │
+│  │   └── validation.rs # Rollout spec validation                        │
 │  ├── strategies/                                                         │
 │  │   ├── mod.rs        # RolloutStrategy trait + select_strategy()     │
 │  │   ├── canary.rs     # Gradual traffic shifting                       │
 │  │   ├── blue_green.rs # Instant cutover                                │
+│  │   ├── ab_testing.rs # A/B testing with statistical analysis          │
 │  │   └── simple.rs     # Rolling update                                 │
-│  ├── cdevents.rs       # CloudEvents emission                           │
-│  └── prometheus.rs     # Metrics evaluation                             │
+│  ├── cdevents.rs       # CloudEvents emission (EventSink trait)         │
+│  ├── prometheus.rs     # Metrics evaluation (MetricsQuerier trait)       │
+│  ├── prometheus_ab.rs  # A/B statistical significance (Z-test)          │
+│  ├── clock.rs          # Clock trait (SystemClock/MockClock)             │
+│  └── occurrence.rs     # FALSE Protocol occurrence emission              │
 │                                                                          │
 │  server/                                                                 │
 │  ├── health.rs         # /healthz, /readyz                              │
@@ -76,6 +88,8 @@ pub trait RolloutStrategy: Send + Sync {
 Initializing ──┬──> Progressing (Canary) ──> Paused ──> Completed
                │
                ├──> Preview (Blue-Green) ──────────────> Completed
+               │
+               ├──> Experimenting (A/B) ──> Concluded ──> Completed
                │
                └──> Completed (Simple)
 
@@ -292,12 +306,20 @@ grep -r "println!" src/ --include="*.rs" | grep -v "_test.rs"
 |------|-------|
 | Main entry point | `src/main.rs` |
 | Rollout CRD | `src/crd/rollout.rs` |
-| Reconciliation logic | `src/controller/rollout.rs` |
+| Reconcile loop + Context | `src/controller/rollout/reconcile.rs` |
+| ReplicaSet building | `src/controller/rollout/replicaset.rs` |
+| Status computation | `src/controller/rollout/status.rs` |
+| Traffic weights | `src/controller/rollout/traffic.rs` |
+| Validation | `src/controller/rollout/validation.rs` |
 | Strategy trait | `src/controller/strategies/mod.rs` |
 | Canary strategy | `src/controller/strategies/canary.rs` |
 | Blue-green strategy | `src/controller/strategies/blue_green.rs` |
-| CDEvents | `src/controller/cdevents.rs` |
-| Prometheus client | `src/controller/prometheus.rs` |
+| A/B testing strategy | `src/controller/strategies/ab_testing.rs` |
+| CDEvents (EventSink) | `src/controller/cdevents.rs` |
+| Prometheus (MetricsQuerier) | `src/controller/prometheus.rs` |
+| A/B statistical analysis | `src/controller/prometheus_ab.rs` |
+| Clock abstraction | `src/controller/clock.rs` |
+| FALSE Protocol occurrences | `src/controller/occurrence.rs` |
 | Leader election | `src/server/leader.rs` |
 | Health endpoints | `src/server/health.rs` |
 | K8s manifests | `deploy/` |
@@ -317,6 +339,7 @@ grep -r "println!" src/ --include="*.rs" | grep -v "_test.rs"
 | `axum` 0.8 | HTTP server |
 | `cdevents-sdk` | CDEvents emission |
 | `reqwest` | HTTP client |
+| `ulid` | ULID generation for FALSE Protocol |
 | `chrono` | Timestamp parsing |
 | `thiserror` | Error types |
 | `async-trait` | Async trait support |
