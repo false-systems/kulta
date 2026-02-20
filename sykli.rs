@@ -17,7 +17,7 @@ fn main() {
     // === TEMPLATE ===
     // Common Rust container configuration
     let rust = Template::new()
-        .container("rust:1.83")
+        .container("rust:1.85")
         .mount_dir(&src, "/src")
         .mount_cache(&cargo_registry, "/usr/local/cargo/registry")
         .mount_cache(&cargo_git, "/usr/local/cargo/git")
