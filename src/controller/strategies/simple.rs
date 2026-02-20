@@ -7,6 +7,7 @@ use super::{RolloutStrategy, StrategyError};
 use crate::controller::rollout::{build_replicaset_for_simple, ensure_replicaset_exists, Context};
 use crate::crd::rollout::{Phase, Rollout, RolloutStatus};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::ReplicaSet;
 use kube::api::Api;
 use kube::ResourceExt;
@@ -75,7 +76,7 @@ impl RolloutStrategy for SimpleStrategyHandler {
         Ok(())
     }
 
-    fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus {
+    fn compute_next_status(&self, rollout: &Rollout, _now: DateTime<Utc>) -> RolloutStatus {
         // Simple strategy always completes immediately (no steps)
         RolloutStatus {
             phase: Some(Phase::Completed),
@@ -92,6 +93,7 @@ impl RolloutStrategy for SimpleStrategyHandler {
             step_start_time: None,
             progress_started_at: None,
             decisions: vec![],
+            ab_experiment: None,
         }
     }
 
@@ -153,6 +155,7 @@ mod tests {
                     simple: Some(SimpleStrategy { analysis }),
                     canary: None,
                     blue_green: None,
+                    ab_testing: None,
                 },
 
                 max_surge: None,
@@ -174,7 +177,7 @@ mod tests {
         let rollout = create_simple_rollout(5, false);
         let strategy = SimpleStrategyHandler;
 
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         assert_eq!(status.phase, Some(Phase::Completed));
         assert_eq!(status.current_step_index, None);

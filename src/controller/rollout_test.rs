@@ -1,9 +1,12 @@
 use super::*;
 use crate::crd::rollout::{
-    CanaryStep, CanaryStrategy, GatewayAPIRouting, PauseDuration, Phase, Rollout, RolloutSpec,
-    RolloutStatus, RolloutStrategy, SimpleStrategy, TrafficRouting,
+    ABHeaderMatch, ABMatch, ABStrategy, CanaryStep, CanaryStrategy, GatewayAPIRouting,
+    PauseDuration, Phase, Rollout, RolloutSpec, RolloutStatus, RolloutStrategy, SimpleStrategy,
+    TrafficRouting,
 };
+use chrono::Utc;
 use kube::api::ObjectMeta;
+use std::time::Duration;
 
 // Helper function to create a test Rollout with simple strategy
 fn create_test_rollout_with_simple() -> Rollout {
@@ -45,6 +48,7 @@ fn create_test_rollout_with_simple() -> Rollout {
                 simple: Some(SimpleStrategy { analysis: None }),
                 canary: None,
                 blue_green: None,
+                ab_testing: None,
             },
             max_surge: None,
             max_unavailable: None,
@@ -98,11 +102,13 @@ fn create_test_rollout_with_blue_green() -> Rollout {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: "my-app-active".to_string(),
                     preview_service: "my-app-preview".to_string(),
+                    port: None,
                     auto_promotion_enabled: Some(false),
                     auto_promotion_seconds: None,
                     traffic_routing: None,
                     analysis: None,
                 }),
+                ab_testing: None,
             },
             max_surge: None,
             max_unavailable: None,
@@ -147,6 +153,90 @@ fn test_blue_green_creates_active_and_preview_replicasets() {
     );
 }
 
+// Test A/B testing creates variant-a and variant-b ReplicaSets
+#[test]
+fn test_ab_testing_creates_variant_replicasets() {
+    let rollout = Rollout {
+        metadata: ObjectMeta {
+            name: Some("ab-rollout".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector {
+                ..Default::default()
+            },
+            template: k8s_openapi::api::core::v1::PodTemplateSpec {
+                spec: Some(k8s_openapi::api::core::v1::PodSpec {
+                    containers: vec![k8s_openapi::api::core::v1::Container {
+                        name: "app".to_string(),
+                        image: Some("nginx:1.21".to_string()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            strategy: RolloutStrategy {
+                canary: None,
+                blue_green: None,
+                simple: None,
+                ab_testing: Some(ABStrategy {
+                    variant_a_service: "checkout-control".to_string(),
+                    variant_b_service: "checkout-experiment".to_string(),
+                    port: None,
+                    variant_b_match: ABMatch {
+                        header: Some(ABHeaderMatch {
+                            name: "X-Variant".to_string(),
+                            value: "B".to_string(),
+                            match_type: None,
+                        }),
+                        cookie: None,
+                    },
+                    traffic_routing: None,
+                    max_duration: None,
+                    analysis: None,
+                }),
+            },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
+        },
+        status: None,
+    };
+
+    let (variant_a, variant_b) = build_replicasets_for_ab_testing(&rollout, 3).unwrap();
+
+    // Variant A
+    assert_eq!(
+        variant_a.metadata.name.as_deref(),
+        Some("ab-rollout-variant-a")
+    );
+    assert_eq!(variant_a.spec.as_ref().unwrap().replicas, Some(3));
+    let a_labels = variant_a.metadata.labels.as_ref().unwrap();
+    assert_eq!(
+        a_labels.get("rollouts.kulta.io/type"),
+        Some(&"variant-a".to_string())
+    );
+    assert_eq!(
+        a_labels.get("rollouts.kulta.io/managed"),
+        Some(&"true".to_string())
+    );
+
+    // Variant B
+    assert_eq!(
+        variant_b.metadata.name.as_deref(),
+        Some("ab-rollout-variant-b")
+    );
+    assert_eq!(variant_b.spec.as_ref().unwrap().replicas, Some(3));
+    let b_labels = variant_b.metadata.labels.as_ref().unwrap();
+    assert_eq!(
+        b_labels.get("rollouts.kulta.io/type"),
+        Some(&"variant-b".to_string())
+    );
+}
+
 // TDD Cycle 3 (Blue-Green Strategy): RED - Test status for blue-green strategy
 #[test]
 fn test_compute_desired_status_for_blue_green_strategy() {
@@ -154,7 +244,7 @@ fn test_compute_desired_status_for_blue_green_strategy() {
     let rollout = create_test_rollout_with_blue_green();
 
     // ACT: Compute desired status
-    let status = compute_desired_status(&rollout);
+    let status = compute_desired_status(&rollout, Utc::now());
 
     // ASSERT: Blue-green starts in Preview phase (preview RS ready, awaiting promotion)
     assert_eq!(status.phase, Some(Phase::Preview));
@@ -200,7 +290,7 @@ fn test_compute_desired_status_for_simple_strategy() {
     let rollout = create_test_rollout_with_simple();
 
     // ACT: Compute desired status
-    let status = compute_desired_status(&rollout);
+    let status = compute_desired_status(&rollout, Utc::now());
 
     // ASSERT: Simple strategy goes directly to Completed (no steps)
     assert_eq!(status.phase, Some(Phase::Completed));
@@ -248,9 +338,11 @@ fn create_test_rollout_with_canary() -> Rollout {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![], // Tests will set their own steps
                     analysis: None,
                     traffic_routing: None,
@@ -304,9 +396,11 @@ async fn test_reconcile_creates_stable_replicaset() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -428,9 +522,11 @@ async fn test_build_replicaset_spec() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![],
                     analysis: None,
                     traffic_routing: None,
@@ -512,9 +608,11 @@ async fn test_reconcile_creates_canary_replicaset() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(20),
                         pause: None,
@@ -608,9 +706,11 @@ async fn test_replicaset_has_kulta_managed_label() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![],
                     analysis: None,
                     traffic_routing: None,
@@ -727,9 +827,11 @@ async fn test_build_both_stable_and_canary_replicasets() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![],
                     analysis: None,
                     traffic_routing: None,
@@ -847,9 +949,11 @@ async fn test_calculate_traffic_weights_step0() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -902,9 +1006,11 @@ async fn test_calculate_traffic_weights_step1() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -953,9 +1059,11 @@ async fn test_calculate_traffic_weights_no_step() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(20),
                         pause: None,
@@ -995,9 +1103,11 @@ async fn test_calculate_traffic_weights_complete() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1046,9 +1156,11 @@ async fn test_calculate_traffic_weights_beyond_steps() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(20),
                         pause: None,
@@ -1091,9 +1203,11 @@ async fn test_build_httproute_backend_weights() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(20),
                         pause: None,
@@ -1150,9 +1264,11 @@ async fn test_convert_to_gateway_api_backend_refs() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(20),
                         pause: None,
@@ -1219,6 +1335,7 @@ async fn test_gateway_api_backend_refs_no_canary_strategy() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: None,
             }, // No canary strategy
 
@@ -1253,9 +1370,11 @@ async fn test_initialize_rollout_status() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1283,7 +1402,7 @@ async fn test_initialize_rollout_status() {
     // - current_step_index = 0 (start at first step)
     // - phase = "Progressing"
     // - current_weight = 20 (from step 0)
-    let status = initialize_rollout_status(&rollout);
+    let status = initialize_rollout_status(&rollout, Utc::now());
 
     assert_eq!(status.current_step_index, Some(0));
     assert_eq!(status.phase, Some(Phase::Progressing));
@@ -1311,9 +1430,11 @@ async fn test_initialize_sets_progress_started_at() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(20),
                         pause: None,
@@ -1330,7 +1451,7 @@ async fn test_initialize_sets_progress_started_at() {
         status: None,
     };
 
-    let status = initialize_rollout_status(&rollout);
+    let status = initialize_rollout_status(&rollout, Utc::now());
 
     // progress_started_at should be set to a valid RFC3339 timestamp
     assert!(
@@ -1363,9 +1484,11 @@ async fn test_should_progress_to_next_step() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1396,7 +1519,7 @@ async fn test_should_progress_to_next_step() {
     // Returns true if:
     // - No pause defined in current step
     // - (Future: metrics look good)
-    let should_progress = should_progress_to_next_step(&rollout);
+    let should_progress = should_progress_to_next_step(&rollout, Utc::now());
 
     assert!(should_progress, "Should progress when no pause is defined");
 }
@@ -1417,9 +1540,11 @@ async fn test_should_not_progress_when_paused() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1448,7 +1573,7 @@ async fn test_should_not_progress_when_paused() {
         }),
     };
 
-    let should_progress = should_progress_to_next_step(&rollout);
+    let should_progress = should_progress_to_next_step(&rollout, Utc::now());
 
     assert!(!should_progress, "Should NOT progress when paused");
 }
@@ -1469,9 +1594,11 @@ async fn test_advance_to_next_step() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1504,7 +1631,7 @@ async fn test_advance_to_next_step() {
     // - current_step_index = 1
     // - current_weight = 50
     // - phase = "Progressing"
-    let new_status = advance_to_next_step(&rollout);
+    let new_status = advance_to_next_step(&rollout, Utc::now());
 
     assert_eq!(new_status.current_step_index, Some(1));
     assert_eq!(new_status.current_weight, Some(50));
@@ -1532,9 +1659,11 @@ async fn test_advance_preserves_progress_started_at() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1563,7 +1692,7 @@ async fn test_advance_preserves_progress_started_at() {
         }),
     };
 
-    let new_status = advance_to_next_step(&rollout);
+    let new_status = advance_to_next_step(&rollout, Utc::now());
 
     // progress_started_at should be preserved
     assert_eq!(
@@ -1589,9 +1718,11 @@ async fn test_advance_to_final_step() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1620,7 +1751,7 @@ async fn test_advance_to_final_step() {
     };
 
     // Advance from step 0 to step 1 (final step)
-    let new_status = advance_to_next_step(&rollout);
+    let new_status = advance_to_next_step(&rollout, Utc::now());
 
     assert_eq!(new_status.current_step_index, Some(1));
     assert_eq!(new_status.current_weight, Some(100));
@@ -1652,9 +1783,11 @@ async fn test_compute_desired_status_for_new_rollout() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1679,7 +1812,7 @@ async fn test_compute_desired_status_for_new_rollout() {
 
     // Function to test: compute_desired_status
     // Returns the status that should be written to K8s
-    let desired_status = compute_desired_status(&rollout);
+    let desired_status = compute_desired_status(&rollout, Utc::now());
 
     // Should initialize to step 0
     assert_eq!(desired_status.current_step_index, Some(0));
@@ -1703,9 +1836,11 @@ async fn test_compute_desired_status_progresses_step() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1734,7 +1869,7 @@ async fn test_compute_desired_status_progresses_step() {
     };
 
     // Should progress to step 1
-    let desired_status = compute_desired_status(&rollout);
+    let desired_status = compute_desired_status(&rollout, Utc::now());
 
     assert_eq!(desired_status.current_step_index, Some(1));
     assert_eq!(desired_status.current_weight, Some(50));
@@ -1757,9 +1892,11 @@ async fn test_compute_desired_status_respects_pause() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(20),
@@ -1790,7 +1927,7 @@ async fn test_compute_desired_status_respects_pause() {
     };
 
     // Should NOT progress (paused)
-    let desired_status = compute_desired_status(&rollout);
+    let desired_status = compute_desired_status(&rollout, Utc::now());
 
     // Should stay at step 0
     assert_eq!(desired_status.current_step_index, Some(0));
@@ -1981,7 +2118,7 @@ fn test_should_progress_when_pause_duration_elapsed() {
 
     // Should progress because duration elapsed
     assert!(
-        should_progress_to_next_step(&rollout),
+        should_progress_to_next_step(&rollout, Utc::now()),
         "Should progress when pause duration elapsed"
     );
 }
@@ -2023,7 +2160,7 @@ fn test_should_not_progress_when_pause_duration_not_elapsed() {
 
     // Should NOT progress because duration not elapsed
     assert!(
-        !should_progress_to_next_step(&rollout),
+        !should_progress_to_next_step(&rollout, Utc::now()),
         "Should not progress when pause duration not elapsed"
     );
 }
@@ -2062,7 +2199,7 @@ fn test_advance_sets_pause_start_time() {
     });
 
     // Advance to step 0 (which has pause)
-    let new_status = advance_to_next_step(&rollout);
+    let new_status = advance_to_next_step(&rollout, Utc::now());
 
     // Should set pause_start_time
     assert!(
@@ -2113,7 +2250,7 @@ fn test_advance_clears_pause_start_time_when_no_pause() {
     });
 
     // Advance to step 1 (which has no pause)
-    let new_status = advance_to_next_step(&rollout);
+    let new_status = advance_to_next_step(&rollout, Utc::now());
 
     // Should clear pause_start_time
     assert!(
@@ -2171,7 +2308,7 @@ fn test_has_promote_annotation() {
 
     // Should progress due to promote annotation
     assert!(
-        should_progress_to_next_step(&rollout),
+        should_progress_to_next_step(&rollout, Utc::now()),
         "Should progress when promote annotation is set"
     );
 }
@@ -2210,7 +2347,7 @@ fn test_should_progress_when_promoted() {
 
     // WITHOUT annotation - should not progress
     assert!(
-        !should_progress_to_next_step(&rollout),
+        !should_progress_to_next_step(&rollout, Utc::now()),
         "Should not progress indefinite pause without promotion"
     );
 
@@ -2225,7 +2362,7 @@ fn test_should_progress_when_promoted() {
     };
 
     assert!(
-        should_progress_to_next_step(&rollout),
+        should_progress_to_next_step(&rollout, Utc::now()),
         "Should progress indefinite pause with promotion annotation"
     );
 }
@@ -2786,7 +2923,7 @@ async fn test_calculate_requeue_interval_short_pause() {
     let pause_duration = Duration::from_secs(10);
 
     // ACT: Calculate requeue interval
-    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration), Utc::now());
 
     // ASSERT: Should requeue in ~8s (10s - 2s), but at least 5s
     assert!(
@@ -2803,7 +2940,7 @@ async fn test_calculate_requeue_interval_long_pause() {
     let pause_duration = Duration::from_secs(5 * 60); // 5 minutes
 
     // ACT: Calculate requeue interval
-    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration), Utc::now());
 
     // ASSERT: Should requeue in ~4.5min (270s), but capped at 300s max
     assert!(
@@ -2820,7 +2957,7 @@ async fn test_calculate_requeue_interval_almost_done() {
     let pause_duration = Duration::from_secs(10);
 
     // ACT: Calculate requeue interval
-    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration), Utc::now());
 
     // ASSERT: Should requeue in ~1s, but minimum 5s
     assert_eq!(
@@ -2834,7 +2971,7 @@ async fn test_calculate_requeue_interval_almost_done() {
 async fn test_calculate_requeue_interval_no_pause() {
     // ARRANGE: Rollout not paused (no pause_start_time)
     // ACT: Calculate requeue interval
-    let requeue = calculate_requeue_interval(None, None);
+    let requeue = calculate_requeue_interval(None, None, Utc::now());
 
     // ASSERT: Should use default 30s interval
     assert_eq!(
@@ -2850,7 +2987,7 @@ async fn test_calculate_requeue_interval_manual_pause() {
     let pause_start = Utc::now() - chrono::Duration::seconds(60);
 
     // ACT: Calculate requeue interval
-    let requeue = calculate_requeue_interval(Some(&pause_start), None);
+    let requeue = calculate_requeue_interval(Some(&pause_start), None, Utc::now());
 
     // ASSERT: Should use default 30s interval
     assert_eq!(
@@ -2867,7 +3004,7 @@ async fn test_calculate_requeue_interval_pause_already_elapsed() {
     let pause_duration = Duration::from_secs(10);
 
     // ACT: Calculate requeue interval
-    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration));
+    let requeue = calculate_requeue_interval(Some(&pause_start), Some(pause_duration), Utc::now());
 
     // ASSERT: Should use minimum 5s (saturating_sub gives 0, clamped to 5s)
     assert_eq!(
@@ -2901,9 +3038,11 @@ async fn test_evaluate_rollout_metrics_healthy() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(10),
                         pause: None,
@@ -2954,6 +3093,9 @@ async fn test_evaluate_rollout_metrics_healthy() {
         }
     }"#;
     ctx.prometheus_client
+        .as_any()
+        .downcast_ref::<crate::controller::prometheus::MockPrometheusClient>()
+        .unwrap()
         .set_mock_response(mock_response.to_string());
 
     // ACT: Evaluate metrics
@@ -2984,9 +3126,11 @@ async fn test_evaluate_rollout_metrics_unhealthy() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(10),
                         pause: None,
@@ -3037,6 +3181,9 @@ async fn test_evaluate_rollout_metrics_unhealthy() {
         }
     }"#;
     ctx.prometheus_client
+        .as_any()
+        .downcast_ref::<crate::controller::prometheus::MockPrometheusClient>()
+        .unwrap()
         .set_mock_response(mock_response.to_string());
 
     // ACT: Evaluate metrics
@@ -3065,9 +3212,11 @@ async fn test_evaluate_rollout_metrics_no_analysis_config() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(10),
                         pause: None,
@@ -3135,6 +3284,7 @@ async fn test_evaluate_rollout_metrics_skips_during_warmup() {
                 canary: Some(CanaryStrategy {
                     canary_service: "test-canary".to_string(),
                     stable_service: "test-stable".to_string(),
+                    port: None,
                     steps: vec![],
                     traffic_routing: Some(TrafficRouting {
                         gateway_api: Some(GatewayAPIRouting {
@@ -3155,6 +3305,7 @@ async fn test_evaluate_rollout_metrics_skips_during_warmup() {
                     }),
                 }),
                 blue_green: None,
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -3214,6 +3365,7 @@ async fn test_evaluate_rollout_metrics_runs_after_warmup() {
                 canary: Some(CanaryStrategy {
                     canary_service: "test-canary".to_string(),
                     stable_service: "test-stable".to_string(),
+                    port: None,
                     steps: vec![],
                     traffic_routing: Some(TrafficRouting {
                         gateway_api: Some(GatewayAPIRouting {
@@ -3234,6 +3386,7 @@ async fn test_evaluate_rollout_metrics_runs_after_warmup() {
                     }),
                 }),
                 blue_green: None,
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -3254,7 +3407,7 @@ async fn test_evaluate_rollout_metrics_runs_after_warmup() {
 
     // Set mock Prometheus response (healthy metrics)
     let ctx = Context::new_mock();
-    ctx.prometheus_client.set_mock_response(
+    ctx.prometheus_client.as_any().downcast_ref::<crate::controller::prometheus::MockPrometheusClient>().unwrap().set_mock_response(
         r#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1234567890,"0.01"]}]}}"#.to_string()
     );
 
@@ -3292,6 +3445,7 @@ async fn test_evaluate_rollout_metrics_no_warmup_configured() {
                 canary: Some(CanaryStrategy {
                     canary_service: "test-canary".to_string(),
                     stable_service: "test-stable".to_string(),
+                    port: None,
                     steps: vec![],
                     traffic_routing: Some(TrafficRouting {
                         gateway_api: Some(GatewayAPIRouting {
@@ -3312,6 +3466,7 @@ async fn test_evaluate_rollout_metrics_no_warmup_configured() {
                     }),
                 }),
                 blue_green: None,
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -3332,7 +3487,7 @@ async fn test_evaluate_rollout_metrics_no_warmup_configured() {
 
     // Set mock Prometheus response (healthy metrics)
     let ctx = Context::new_mock();
-    ctx.prometheus_client.set_mock_response(
+    ctx.prometheus_client.as_any().downcast_ref::<crate::controller::prometheus::MockPrometheusClient>().unwrap().set_mock_response(
         r#"{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1234567890,"0.01"]}]}}"#.to_string()
     );
 
@@ -3372,6 +3527,7 @@ async fn test_blue_green_builds_httproute_backend_refs() {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: "bg-app-active".to_string(),
                     preview_service: "bg-app-preview".to_string(),
+                    port: None,
                     auto_promotion_enabled: None,
                     auto_promotion_seconds: None,
                     traffic_routing: Some(TrafficRouting {
@@ -3381,6 +3537,7 @@ async fn test_blue_green_builds_httproute_backend_refs() {
                     }),
                     analysis: None,
                 }),
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -3446,6 +3603,7 @@ async fn test_blue_green_httproute_after_promotion() {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: "bg-app-active".to_string(),
                     preview_service: "bg-app-preview".to_string(),
+                    port: None,
                     auto_promotion_enabled: None,
                     auto_promotion_seconds: None,
                     traffic_routing: Some(TrafficRouting {
@@ -3455,6 +3613,7 @@ async fn test_blue_green_httproute_after_promotion() {
                     }),
                     analysis: None,
                 }),
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -3659,7 +3818,7 @@ fn test_progress_deadline_within_limit() {
         ..Default::default()
     };
 
-    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    let is_stuck = is_progress_deadline_exceeded(&status, 600, Utc::now());
     assert!(!is_stuck, "Should not be stuck if within deadline");
 }
 
@@ -3673,7 +3832,7 @@ fn test_progress_deadline_exceeded() {
         ..Default::default()
     };
 
-    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    let is_stuck = is_progress_deadline_exceeded(&status, 600, Utc::now());
     assert!(is_stuck, "Should be stuck if past deadline");
 }
 
@@ -3686,7 +3845,7 @@ fn test_progress_deadline_no_start_time() {
         ..Default::default()
     };
 
-    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    let is_stuck = is_progress_deadline_exceeded(&status, 600, Utc::now());
     assert!(!is_stuck, "Should not be stuck if no start time");
 }
 
@@ -3700,6 +3859,6 @@ fn test_progress_deadline_completed_not_stuck() {
         ..Default::default()
     };
 
-    let is_stuck = is_progress_deadline_exceeded(&status, 600);
+    let is_stuck = is_progress_deadline_exceeded(&status, 600, Utc::now());
     assert!(!is_stuck, "Completed rollout should not be marked stuck");
 }

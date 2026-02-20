@@ -9,6 +9,7 @@ use crate::controller::rollout::{
 };
 use crate::crd::rollout::{Phase, Rollout, RolloutStatus};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::ReplicaSet;
 use kube::api::Api;
 use kube::ResourceExt;
@@ -83,7 +84,7 @@ impl RolloutStrategy for BlueGreenStrategyHandler {
         reconcile_gateway_api_traffic(rollout, ctx, "blue-green").await
     }
 
-    fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus {
+    fn compute_next_status(&self, rollout: &Rollout, _now: DateTime<Utc>) -> RolloutStatus {
         // Check current status
         let current_phase = rollout.status.as_ref().and_then(|s| s.phase.clone());
 
@@ -176,6 +177,7 @@ mod tests {
                     blue_green: Some(BlueGreenStrategy {
                         active_service: "app-active".to_string(),
                         preview_service: "app-preview".to_string(),
+                        port: None,
                         auto_promotion_enabled: None,
                         auto_promotion_seconds: None,
                         traffic_routing: Some(TrafficRouting {
@@ -185,6 +187,7 @@ mod tests {
                         }),
                         analysis: None,
                     }),
+                    ab_testing: None,
                 },
 
                 max_surge: None,
@@ -220,7 +223,7 @@ mod tests {
         let rollout = create_blue_green_rollout(5);
         let strategy = BlueGreenStrategyHandler;
 
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         // Blue-green should start in Preview phase
         assert_eq!(status.phase, Some(Phase::Preview));
@@ -244,7 +247,7 @@ mod tests {
         });
 
         let strategy = BlueGreenStrategyHandler;
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         // Should stay in Preview without promotion annotation
         assert_eq!(status.phase, Some(Phase::Preview));
@@ -272,7 +275,7 @@ mod tests {
         rollout.metadata.annotations = Some(annotations);
 
         let strategy = BlueGreenStrategyHandler;
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         // Should transition to Completed
         assert_eq!(status.phase, Some(Phase::Completed));
@@ -294,7 +297,7 @@ mod tests {
         });
 
         let strategy = BlueGreenStrategyHandler;
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         // Should stay Completed
         assert_eq!(status.phase, Some(Phase::Completed));
