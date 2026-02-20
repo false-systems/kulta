@@ -474,4 +474,70 @@ mod tests {
         // Effect size should be -0.5 (50% reduction)
         assert!((result.effect_size - (-0.5)).abs() < 0.01);
     }
+
+    #[test]
+    fn test_determine_experiment_conclusion_empty_results() {
+        let results: Vec<ABMetricResult> = vec![];
+        let conclusion = determine_experiment_conclusion(&results);
+        assert!(conclusion.is_none());
+    }
+
+    #[test]
+    fn test_calculate_ab_significance_both_zero_rates() {
+        let result = calculate_ab_significance(
+            0.0, 0.0, 10000, 10000, 0.95,
+            &ABMetricDirection::Lower,
+        );
+        assert!(!result.is_significant);
+        assert!((result.effect_size - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_ab_significance_rate_a_zero_rate_b_positive() {
+        let result = calculate_ab_significance(
+            0.0, 0.05, 10000, 10000, 0.95,
+            &ABMetricDirection::Lower,
+        );
+        // effect_size should be 1.0 when rate_a is 0 and rate_b > 0
+        assert!((result.effect_size - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_calculate_ab_significance_se_zero_guard() {
+        // Both rates identical and non-zero with same sample sizes → se could be very small
+        // but with truly identical rates, z_score = 0, so not significant
+        let result = calculate_ab_significance(
+            0.5, 0.5, 100, 100, 0.95,
+            &ABMetricDirection::Lower,
+        );
+        assert!(!result.is_significant);
+    }
+
+    #[test]
+    fn test_determine_experiment_conclusion_consensus_a() {
+        let results = vec![
+            ABMetricResult {
+                name: "error-rate".to_string(),
+                value_a: 0.01,
+                value_b: 0.05,
+                confidence: 0.99,
+                is_significant: true,
+                winner: Some(ABVariant::A),
+            },
+            ABMetricResult {
+                name: "latency".to_string(),
+                value_a: 0.10,
+                value_b: 0.20,
+                confidence: 0.98,
+                is_significant: true,
+                winner: Some(ABVariant::A),
+            },
+        ];
+
+        let conclusion = determine_experiment_conclusion(&results);
+        assert!(conclusion.is_some());
+        let (winner, reason) = conclusion.unwrap();
+        assert_eq!(winner, ABVariant::A);
+        assert_eq!(reason, ABConclusionReason::ConsensusReached);
+    }
 }

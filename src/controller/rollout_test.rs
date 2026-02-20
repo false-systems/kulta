@@ -1,12 +1,92 @@
 use super::*;
+use crate::controller::clock::MockClock;
+use crate::controller::prometheus::MockPrometheusClient;
 use crate::crd::rollout::{
-    ABHeaderMatch, ABMatch, ABStrategy, CanaryStep, CanaryStrategy, GatewayAPIRouting,
-    PauseDuration, Phase, Rollout, RolloutSpec, RolloutStatus, RolloutStrategy, SimpleStrategy,
-    TrafficRouting,
+    ABAnalysisConfig, ABConclusionReason, ABExperimentStatus, ABHeaderMatch, ABMatch, ABStrategy,
+    ABVariant, CanaryStep, CanaryStrategy, GatewayAPIRouting, PauseDuration, Phase, Rollout,
+    RolloutSpec, RolloutStatus, RolloutStrategy, SimpleStrategy, TrafficRouting,
 };
 use chrono::Utc;
 use kube::api::ObjectMeta;
+use std::sync::Arc;
 use std::time::Duration;
+
+// Helper: create a Context with custom prometheus mock and fixed clock
+fn create_test_context_with_prometheus(
+    prometheus: MockPrometheusClient,
+    now: chrono::DateTime<Utc>,
+) -> Context {
+    let mut ctx = Context::new_mock();
+    ctx.prometheus_client = Arc::new(prometheus);
+    ctx.clock = Arc::new(MockClock::new(now));
+    ctx
+}
+
+// Helper: create an A/B rollout with analysis config
+fn create_ab_rollout_with_analysis(
+    started_at: &str,
+    phase: Phase,
+    min_duration: Option<&str>,
+    max_duration: Option<&str>,
+    min_sample_size: Option<i32>,
+    confidence_level: Option<f64>,
+) -> Rollout {
+    Rollout {
+        metadata: ObjectMeta {
+            name: Some("ab-test".to_string()),
+            namespace: Some("default".to_string()),
+            ..Default::default()
+        },
+        spec: RolloutSpec {
+            replicas: 3,
+            selector: k8s_openapi::apimachinery::pkg::apis::meta::v1::LabelSelector::default(),
+            template: k8s_openapi::api::core::v1::PodTemplateSpec::default(),
+            strategy: RolloutStrategy {
+                canary: None,
+                blue_green: None,
+                simple: None,
+                ab_testing: Some(ABStrategy {
+                    variant_a_service: "svc-a".to_string(),
+                    variant_b_service: "svc-b".to_string(),
+                    port: None,
+                    variant_b_match: ABMatch {
+                        header: Some(ABHeaderMatch {
+                            name: "X-Variant".to_string(),
+                            value: "B".to_string(),
+                            match_type: None,
+                        }),
+                        cookie: None,
+                    },
+                    traffic_routing: None,
+                    max_duration: max_duration.map(|s| s.to_string()),
+                    analysis: Some(ABAnalysisConfig {
+                        prometheus: None,
+                        metrics: vec![],
+                        min_duration: min_duration.map(|s| s.to_string()),
+                        min_sample_size,
+                        confidence_level,
+                    }),
+                }),
+            },
+            max_surge: None,
+            max_unavailable: None,
+            progress_deadline_seconds: None,
+        },
+        status: Some(RolloutStatus {
+            phase: Some(phase),
+            ab_experiment: Some(ABExperimentStatus {
+                started_at: started_at.to_string(),
+                concluded_at: None,
+                sample_size_a: None,
+                sample_size_b: None,
+                results: vec![],
+                winner: None,
+                conclusion_reason: None,
+            }),
+            ..Default::default()
+        }),
+    }
+}
 
 // Helper function to create a test Rollout with simple strategy
 fn create_test_rollout_with_simple() -> Rollout {
@@ -3861,4 +3941,368 @@ fn test_progress_deadline_completed_not_stuck() {
 
     let is_stuck = is_progress_deadline_exceeded(&status, 600, Utc::now());
     assert!(!is_stuck, "Completed rollout should not be marked stuck");
+}
+
+// =============================================
+// evaluate_ab_experiment tests
+// =============================================
+
+/// No ab_testing strategy → returns inconclusive
+#[tokio::test]
+async fn test_evaluate_ab_no_strategy_returns_inconclusive() {
+    let rollout = create_test_rollout_with_simple();
+    let ctx = Context::new_mock();
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+    assert!(result.winner.is_none());
+    assert!(result.reason.is_none());
+}
+
+/// Manual conclude annotation triggers ManualConclusion
+#[tokio::test]
+async fn test_evaluate_ab_manual_conclude_annotation() {
+    let now = Utc::now();
+    let mut rollout = create_ab_rollout_with_analysis(
+        &(now - chrono::Duration::minutes(10)).to_rfc3339(),
+        Phase::Experimenting,
+        None,
+        None,
+        None,
+        None,
+    );
+    rollout.metadata.annotations = Some(
+        vec![(
+            "kulta.io/conclude-experiment".to_string(),
+            "true".to_string(),
+        )]
+        .into_iter()
+        .collect(),
+    );
+    let ctx = create_test_context_with_prometheus(MockPrometheusClient::new(), now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(result.should_conclude);
+    assert!(result.winner.is_none()); // User decides via promote
+    assert_eq!(result.reason, Some(ABConclusionReason::ManualConclusion));
+}
+
+/// Max duration exceeded → conclude with MaxDurationExceeded
+#[tokio::test]
+async fn test_evaluate_ab_max_duration_exceeded() {
+    let now = Utc::now();
+    let started_2h_ago = (now - chrono::Duration::hours(2)).to_rfc3339();
+    let rollout = create_ab_rollout_with_analysis(
+        &started_2h_ago,
+        Phase::Experimenting,
+        None,
+        Some("1h"), // max 1 hour, but 2 hours have passed
+        None,
+        None,
+    );
+    let ctx = create_test_context_with_prometheus(MockPrometheusClient::new(), now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(result.should_conclude);
+    assert!(result.winner.is_none());
+    assert_eq!(
+        result.reason,
+        Some(ABConclusionReason::MaxDurationExceeded)
+    );
+}
+
+/// Max duration NOT exceeded → continues to analysis
+#[tokio::test]
+async fn test_evaluate_ab_max_duration_not_exceeded() {
+    let now = Utc::now();
+    let started_30m_ago = (now - chrono::Duration::minutes(30)).to_rfc3339();
+    let prom = MockPrometheusClient::new();
+    // Enqueue: sample_a, sample_b, rate_a, rate_b
+    prom.enqueue_response(100.0); // sample A
+    prom.enqueue_response(100.0); // sample B
+    prom.enqueue_response(0.05); // rate A
+    prom.enqueue_response(0.05); // rate B (same → no significance)
+
+    let rollout = create_ab_rollout_with_analysis(
+        &started_30m_ago,
+        Phase::Experimenting,
+        None,
+        Some("1h"), // max 1 hour, only 30m passed
+        None,
+        None,
+    );
+    let ctx = create_test_context_with_prometheus(prom, now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    // Should NOT conclude due to max_duration - it continues to statistical analysis
+    // With same rates, no significance → should_conclude = false
+    assert!(!result.should_conclude);
+}
+
+/// Min duration not reached → returns inconclusive without querying prometheus
+#[tokio::test]
+async fn test_evaluate_ab_min_duration_not_reached() {
+    let now = Utc::now();
+    let started_5m_ago = (now - chrono::Duration::minutes(5)).to_rfc3339();
+    let rollout = create_ab_rollout_with_analysis(
+        &started_5m_ago,
+        Phase::Experimenting,
+        Some("30m"), // min 30 minutes, only 5 passed
+        None,
+        None,
+        None,
+    );
+    let ctx = create_test_context_with_prometheus(MockPrometheusClient::new(), now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+    assert!(result.winner.is_none());
+}
+
+/// Insufficient sample size → returns inconclusive with sample counts
+#[tokio::test]
+async fn test_evaluate_ab_insufficient_samples() {
+    let now = Utc::now();
+    let started = (now - chrono::Duration::hours(1)).to_rfc3339();
+    let prom = MockPrometheusClient::new();
+    prom.enqueue_response(15.0); // sample A (below min 30)
+    prom.enqueue_response(20.0); // sample B (below min 30)
+
+    let rollout = create_ab_rollout_with_analysis(
+        &started,
+        Phase::Experimenting,
+        None,
+        None,
+        None, // defaults to 30
+        None,
+    );
+    let ctx = create_test_context_with_prometheus(prom, now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+    assert_eq!(result.sample_size_a, Some(15));
+    assert_eq!(result.sample_size_b, Some(20));
+}
+
+/// Prometheus query failure for sample count → returns inconclusive
+#[tokio::test]
+async fn test_evaluate_ab_prometheus_sample_query_failure() {
+    let now = Utc::now();
+    let started = (now - chrono::Duration::hours(1)).to_rfc3339();
+    let prom = MockPrometheusClient::new();
+    prom.enqueue_error(crate::controller::prometheus::PrometheusError::NoData);
+
+    let rollout = create_ab_rollout_with_analysis(
+        &started,
+        Phase::Experimenting,
+        None,
+        None,
+        None,
+        None,
+    );
+    let ctx = create_test_context_with_prometheus(prom, now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+    assert!(result.sample_size_a.is_none());
+}
+
+/// Prometheus query failure for error rate → returns inconclusive with sample sizes
+#[tokio::test]
+async fn test_evaluate_ab_prometheus_error_rate_failure() {
+    let now = Utc::now();
+    let started = (now - chrono::Duration::hours(1)).to_rfc3339();
+    let prom = MockPrometheusClient::new();
+    prom.enqueue_response(1000.0); // sample A
+    prom.enqueue_response(1000.0); // sample B
+    prom.enqueue_error(crate::controller::prometheus::PrometheusError::NoData); // rate A fails
+
+    let rollout = create_ab_rollout_with_analysis(
+        &started,
+        Phase::Experimenting,
+        None,
+        None,
+        None,
+        None,
+    );
+    let ctx = create_test_context_with_prometheus(prom, now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+    assert_eq!(result.sample_size_a, Some(1000));
+    assert_eq!(result.sample_size_b, Some(1000));
+}
+
+/// Statistical significance reached → B wins
+#[tokio::test]
+async fn test_evaluate_ab_statistical_significance_b_wins() {
+    let now = Utc::now();
+    let started = (now - chrono::Duration::hours(2)).to_rfc3339();
+    let prom = MockPrometheusClient::new();
+    prom.enqueue_response(10000.0); // sample A
+    prom.enqueue_response(10000.0); // sample B
+    prom.enqueue_response(0.05); // rate A (5% error)
+    prom.enqueue_response(0.02); // rate B (2% error) ← B is better
+
+    let rollout = create_ab_rollout_with_analysis(
+        &started,
+        Phase::Experimenting,
+        None,
+        None,
+        Some(30),
+        Some(0.95),
+    );
+    let ctx = create_test_context_with_prometheus(prom, now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(result.should_conclude);
+    assert_eq!(result.winner, Some(ABVariant::B));
+    assert!(result.reason.is_some());
+    assert_eq!(result.sample_size_a, Some(10000));
+    assert_eq!(result.sample_size_b, Some(10000));
+    assert!(!result.results.is_empty());
+}
+
+/// No significant difference → continues experiment
+#[tokio::test]
+async fn test_evaluate_ab_no_significance() {
+    let now = Utc::now();
+    let started = (now - chrono::Duration::hours(1)).to_rfc3339();
+    let prom = MockPrometheusClient::new();
+    prom.enqueue_response(10000.0); // sample A
+    prom.enqueue_response(10000.0); // sample B
+    prom.enqueue_response(0.050); // rate A
+    prom.enqueue_response(0.049); // rate B (tiny difference → no significance)
+
+    let rollout = create_ab_rollout_with_analysis(
+        &started,
+        Phase::Experimenting,
+        None,
+        None,
+        Some(30),
+        Some(0.95),
+    );
+    let ctx = create_test_context_with_prometheus(prom, now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+    assert!(result.winner.is_none());
+    assert!(!result.results.is_empty()); // Has results but not significant
+}
+
+/// No analysis config → returns inconclusive
+#[tokio::test]
+async fn test_evaluate_ab_no_analysis_config() {
+    let now = Utc::now();
+    let started = (now - chrono::Duration::hours(1)).to_rfc3339();
+    let mut rollout = create_ab_rollout_with_analysis(
+        &started,
+        Phase::Experimenting,
+        None,
+        None,
+        None,
+        None,
+    );
+    // Remove the analysis config
+    if let Some(ab) = &mut rollout.spec.strategy.ab_testing {
+        ab.analysis = None;
+    }
+    let ctx = create_test_context_with_prometheus(MockPrometheusClient::new(), now);
+
+    let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
+
+    assert!(!result.should_conclude);
+}
+
+// =============================================
+// Prometheus A/B query builder tests
+// =============================================
+
+#[test]
+fn test_build_ab_error_rate_query_contains_service_name() {
+    let query = crate::controller::prometheus::build_ab_error_rate_query("checkout-v2");
+    assert!(query.contains("checkout-v2"));
+    assert!(query.contains(r#"status=~"5..""#));
+    assert!(query.contains("http_requests_total"));
+}
+
+#[test]
+fn test_build_ab_sample_count_query_contains_service_name() {
+    let query = crate::controller::prometheus::build_ab_sample_count_query("checkout-v2");
+    assert!(query.contains("checkout-v2"));
+    assert!(query.contains("http_requests_total"));
+    assert!(query.contains("increase"));
+}
+
+// =============================================
+// Traffic: default_service_port tests
+// =============================================
+
+#[test]
+fn test_default_service_port_returns_configured() {
+    assert_eq!(default_service_port(Some(8080)), 8080);
+}
+
+#[test]
+fn test_default_service_port_returns_80_when_none() {
+    assert_eq!(default_service_port(None), 80);
+}
+
+// =============================================
+// Validation edge case tests
+// =============================================
+
+#[test]
+fn test_validate_rollout_negative_deadline_rejected() {
+    let mut rollout = create_test_rollout_with_simple();
+    rollout.spec.progress_deadline_seconds = Some(-1);
+
+    let result = validate_rollout(&rollout);
+    assert!(result.is_err());
+}
+
+// =============================================
+// Status: A/B initialization test
+// =============================================
+
+#[test]
+fn test_initialize_status_for_ab_testing_falls_through_to_default() {
+    let now = Utc::now();
+    let mut rollout = create_ab_rollout_with_analysis(
+        &now.to_rfc3339(),
+        Phase::Experimenting,
+        None,
+        None,
+        None,
+        None,
+    );
+    rollout.status = None; // Start fresh
+
+    let status = initialize_rollout_status(&rollout, now);
+    // A/B testing has no dedicated initialization path yet — falls through to default
+    assert!(status.phase.is_none());
+}
+
+/// Test: invalid progress_started_at timestamp doesn't panic
+#[test]
+fn test_progress_deadline_with_invalid_timestamp() {
+    let status = RolloutStatus {
+        phase: Some(Phase::Progressing),
+        progress_started_at: Some("not-a-valid-timestamp".to_string()),
+        ..Default::default()
+    };
+
+    // Should return false (not stuck) rather than panicking
+    let is_stuck = is_progress_deadline_exceeded(&status, 600, Utc::now());
+    assert!(!is_stuck);
 }
