@@ -74,6 +74,10 @@ pub struct RolloutStrategy {
     /// Blue-Green deployment strategy
     #[serde(rename = "blueGreen", skip_serializing_if = "Option::is_none")]
     pub blue_green: Option<BlueGreenStrategy>,
+
+    /// A/B Testing deployment strategy
+    #[serde(rename = "abTesting", skip_serializing_if = "Option::is_none")]
+    pub ab_testing: Option<ABStrategy>,
 }
 
 /// Simple deployment strategy
@@ -101,6 +105,10 @@ pub struct BlueGreenStrategy {
     /// Name of the service that selects preview pods (for testing before promotion)
     #[serde(rename = "previewService")]
     pub preview_service: String,
+
+    /// Service port for traffic routing (default: 80)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
 
     /// Whether to automatically promote after autoPromotionSeconds
     #[serde(
@@ -135,6 +143,10 @@ pub struct CanaryStrategy {
     #[serde(rename = "stableService")]
     pub stable_service: String,
 
+    /// Service port for traffic routing (default: 80)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+
     /// Steps define the canary rollout progression
     #[serde(default)]
     pub steps: Vec<CanaryStep>,
@@ -146,6 +158,141 @@ pub struct CanaryStrategy {
     /// Analysis configuration for automated metrics-based rollback
     #[serde(skip_serializing_if = "Option::is_none")]
     pub analysis: Option<AnalysisConfig>,
+}
+
+/// A/B Testing deployment strategy
+///
+/// Routes users based on headers or cookies to different variants.
+/// Unlike canary (weight-based), A/B testing uses deterministic routing.
+/// Both variants run at full capacity for fair comparison.
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct ABStrategy {
+    /// Name of the service that receives variant-a traffic (control group)
+    #[serde(rename = "variantAService")]
+    pub variant_a_service: String,
+
+    /// Name of the service that receives variant-b traffic (experiment group)
+    #[serde(rename = "variantBService")]
+    pub variant_b_service: String,
+
+    /// Service port for traffic routing (default: 80)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+
+    /// Match conditions for routing to variant B
+    /// Requests matching these conditions go to variant B; others go to variant A
+    #[serde(rename = "variantBMatch")]
+    pub variant_b_match: ABMatch,
+
+    /// Traffic routing configuration (Gateway API HTTPRoute)
+    #[serde(rename = "trafficRouting", skip_serializing_if = "Option::is_none")]
+    pub traffic_routing: Option<TrafficRouting>,
+
+    /// Maximum experiment duration before auto-conclusion (safety limit)
+    /// Format: "24h", "7d", etc.
+    #[serde(rename = "maxDuration", skip_serializing_if = "Option::is_none")]
+    pub max_duration: Option<String>,
+
+    /// Analysis configuration for statistical comparison
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<ABAnalysisConfig>,
+}
+
+/// Match conditions for A/B routing to variant B
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct ABMatch {
+    /// Header-based matching (e.g., X-Variant: B)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header: Option<ABHeaderMatch>,
+
+    /// Cookie-based matching (e.g., ab_variant=B)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cookie: Option<ABCookieMatch>,
+}
+
+/// Header-based match for A/B routing
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct ABHeaderMatch {
+    /// Header name (e.g., "X-Variant")
+    pub name: String,
+
+    /// Header value to match (e.g., "B")
+    pub value: String,
+
+    /// Match type: Exact (default) or RegularExpression
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
+    pub match_type: Option<ABMatchType>,
+}
+
+/// Cookie-based match for A/B routing
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct ABCookieMatch {
+    /// Cookie name (e.g., "ab_variant")
+    pub name: String,
+
+    /// Cookie value to match (e.g., "B")
+    pub value: String,
+}
+
+/// Match type for header/cookie matching
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, JsonSchema)]
+pub enum ABMatchType {
+    #[default]
+    Exact,
+    RegularExpression,
+}
+
+/// Analysis configuration for A/B statistical comparison
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct ABAnalysisConfig {
+    /// Prometheus configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prometheus: Option<PrometheusConfig>,
+
+    /// Metrics to compare between variants
+    #[serde(default)]
+    pub metrics: Vec<ABMetricConfig>,
+
+    /// Minimum experiment duration before statistical evaluation starts
+    /// Ensures sufficient data collection (e.g., "1h", "30m")
+    #[serde(rename = "minDuration", skip_serializing_if = "Option::is_none")]
+    pub min_duration: Option<String>,
+
+    /// Minimum sample size per variant before evaluation
+    /// Prevents premature conclusions
+    #[serde(rename = "minSampleSize", skip_serializing_if = "Option::is_none")]
+    pub min_sample_size: Option<i32>,
+
+    /// Statistical confidence level (default: 0.95)
+    #[serde(rename = "confidenceLevel", skip_serializing_if = "Option::is_none")]
+    pub confidence_level: Option<f64>,
+}
+
+/// Metric configuration for A/B comparison
+#[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+pub struct ABMetricConfig {
+    /// Metric name/template (error-rate, latency-p95, conversion-rate)
+    pub name: String,
+
+    /// Direction: "lower" (B should be lower) or "higher" (B should be higher)
+    /// Determines which variant "wins" if statistically significant
+    pub direction: ABMetricDirection,
+
+    /// Minimum effect size to consider meaningful (optional)
+    /// E.g., 0.05 means B must be at least 5% better
+    #[serde(rename = "minEffectSize", skip_serializing_if = "Option::is_none")]
+    pub min_effect_size: Option<f64>,
+}
+
+/// Direction for metric comparison in A/B testing
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub enum ABMetricDirection {
+    /// Variant B should have lower value (e.g., error rate, latency)
+    #[serde(rename = "lower")]
+    Lower,
+    /// Variant B should have higher value (e.g., conversion rate)
+    #[serde(rename = "higher")]
+    Higher,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
@@ -257,6 +404,10 @@ pub enum Phase {
     Paused,
     /// Blue-green: Preview environment ready, awaiting promotion
     Preview,
+    /// A/B testing: Experiment is active, collecting data
+    Experimenting,
+    /// A/B testing: Experiment concluded (significance reached or max duration)
+    Concluded,
     /// Rollout successfully completed (100% canary or promoted blue-green)
     Completed,
     /// Rollout failed and requires manual intervention
@@ -377,6 +528,90 @@ pub struct RolloutStatus {
     /// Decision history for observability
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decisions: Vec<Decision>,
+
+    /// A/B experiment status (only for abTesting strategy)
+    #[serde(rename = "abExperiment", skip_serializing_if = "Option::is_none")]
+    pub ab_experiment: Option<ABExperimentStatus>,
+}
+
+/// A/B experiment status tracking
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ABExperimentStatus {
+    /// When the experiment started (RFC3339)
+    #[serde(rename = "startedAt")]
+    pub started_at: String,
+
+    /// When the experiment concluded (RFC3339), if concluded
+    #[serde(rename = "concludedAt", skip_serializing_if = "Option::is_none")]
+    pub concluded_at: Option<String>,
+
+    /// Current sample count for variant A
+    #[serde(rename = "sampleSizeA", skip_serializing_if = "Option::is_none")]
+    pub sample_size_a: Option<i64>,
+
+    /// Current sample count for variant B
+    #[serde(rename = "sampleSizeB", skip_serializing_if = "Option::is_none")]
+    pub sample_size_b: Option<i64>,
+
+    /// Statistical results per metric
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub results: Vec<ABMetricResult>,
+
+    /// Overall winner (if concluded with significance)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winner: Option<ABVariant>,
+
+    /// Reason the experiment concluded
+    #[serde(rename = "conclusionReason", skip_serializing_if = "Option::is_none")]
+    pub conclusion_reason: Option<ABConclusionReason>,
+}
+
+/// Result for a single A/B metric comparison
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ABMetricResult {
+    /// Metric name
+    pub name: String,
+
+    /// Value for variant A
+    #[serde(rename = "valueA")]
+    pub value_a: f64,
+
+    /// Value for variant B
+    #[serde(rename = "valueB")]
+    pub value_b: f64,
+
+    /// Statistical confidence level achieved (0.0 to 1.0)
+    pub confidence: f64,
+
+    /// Whether the difference is statistically significant
+    #[serde(rename = "isSignificant")]
+    pub is_significant: bool,
+
+    /// Which variant won for this metric, or None if inconclusive
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub winner: Option<ABVariant>,
+}
+
+/// A/B experiment variant identifier
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub enum ABVariant {
+    /// Variant A (control group)
+    A,
+    /// Variant B (experiment group)
+    B,
+}
+
+/// Reason for A/B experiment conclusion
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub enum ABConclusionReason {
+    /// Statistical significance reached for all metrics
+    SignificanceReached,
+    /// Maximum experiment duration exceeded
+    MaxDurationExceeded,
+    /// Manual conclusion via annotation
+    ManualConclusion,
+    /// Consensus reached (all metrics show same winner)
+    ConsensusReached,
 }
 
 #[cfg(test)]

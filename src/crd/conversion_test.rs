@@ -77,6 +77,7 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
             canary: Some(v1alpha1::CanaryStrategy {
                 canary_service: "my-canary".to_string(),
                 stable_service: "my-stable".to_string(),
+                port: None,
                 steps: vec![v1alpha1::CanaryStep {
                     set_weight: Some(20),
                     pause: None,
@@ -85,6 +86,7 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
                 analysis: None,
             }),
             blue_green: None,
+            ab_testing: None,
         },
         max_surge: None,
         max_unavailable: None,
@@ -142,11 +144,13 @@ fn test_v1beta1_to_v1alpha1_preserves_existing_fields() {
             canary: Some(v1beta1::CanaryStrategy {
                 canary_service: "svc-canary".to_string(),
                 stable_service: "svc-stable".to_string(),
+                port: None,
                 steps: vec![],
                 traffic_routing: None,
                 analysis: None,
             }),
             blue_green: None,
+            ab_testing: None,
         },
         max_surge: Some("25%".to_string()),
         max_unavailable: Some("0".to_string()),
@@ -176,6 +180,7 @@ fn test_roundtrip_v1alpha1_to_v1beta1_to_v1alpha1() {
             simple: Some(v1alpha1::SimpleStrategy { analysis: None }),
             canary: None,
             blue_green: None,
+            ab_testing: None,
         },
         max_surge: None,
         max_unavailable: None,
