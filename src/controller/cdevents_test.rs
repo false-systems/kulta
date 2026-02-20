@@ -21,9 +21,11 @@ async fn test_emit_service_deployed_on_initialization() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(10),
                         pause: None,
@@ -41,7 +43,7 @@ async fn test_emit_service_deployed_on_initialization() {
     };
 
     // Create mock CDEvents sink
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // Old status (None - new rollout)
     let old_status = None;
@@ -114,9 +116,11 @@ async fn test_emit_service_upgraded_on_step_progression() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(10),
@@ -140,7 +144,7 @@ async fn test_emit_service_upgraded_on_step_progression() {
     };
 
     // Create mock CDEvents sink
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // Old status (Progressing at step 0, weight 10%)
     let old_status = Some(RolloutStatus {
@@ -226,9 +230,11 @@ async fn test_emit_service_rolledback_on_failure() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![CanaryStep {
                         set_weight: Some(50),
                         pause: None,
@@ -246,7 +252,7 @@ async fn test_emit_service_rolledback_on_failure() {
     };
 
     // Create mock CDEvents sink
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // Old status (Progressing at step 0, weight 50%)
     let old_status = Some(RolloutStatus {
@@ -332,9 +338,11 @@ async fn test_emit_service_published_on_completion() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(50),
@@ -358,7 +366,7 @@ async fn test_emit_service_published_on_completion() {
     };
 
     // Create mock CDEvents sink
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // Old status (Progressing at final step, weight 100%)
     let old_status = Some(RolloutStatus {
@@ -438,9 +446,11 @@ async fn test_cdevent_contains_kulta_custom_data() {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     canary_service: "test-app-canary".to_string(),
                     stable_service: "test-app-stable".to_string(),
+                    port: None,
                     steps: vec![
                         CanaryStep {
                             set_weight: Some(10),
@@ -463,7 +473,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
         status: None,
     };
 
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // Old status (step 0)
     let old_status = Some(RolloutStatus {
@@ -532,6 +542,7 @@ async fn test_simple_strategy_emits_deployed_and_published() {
                 simple: Some(SimpleStrategy { analysis: None }),
                 canary: None,
                 blue_green: None,
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -542,7 +553,7 @@ async fn test_simple_strategy_emits_deployed_and_published() {
     };
 
     // Create mock CDEvents sink
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // New status for simple strategy (directly Completed)
     let new_status = RolloutStatus {
@@ -600,11 +611,13 @@ async fn test_blue_green_emits_deployed_on_preview() {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: "my-app-active".to_string(),
                     preview_service: "my-app-preview".to_string(),
+                    port: None,
                     auto_promotion_enabled: Some(true),
                     auto_promotion_seconds: Some(30),
                     traffic_routing: None,
                     analysis: None,
                 }),
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -614,7 +627,7 @@ async fn test_blue_green_emits_deployed_on_preview() {
         status: None,
     };
 
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // New status: Preview phase (blue-green initialization)
     let new_status = RolloutStatus {
@@ -676,11 +689,13 @@ async fn test_blue_green_emits_published_on_promotion() {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: "my-app-active".to_string(),
                     preview_service: "my-app-preview".to_string(),
+                    port: None,
                     auto_promotion_enabled: Some(true),
                     auto_promotion_seconds: Some(30),
                     traffic_routing: None,
                     analysis: None,
                 }),
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -690,7 +705,7 @@ async fn test_blue_green_emits_published_on_promotion() {
         status: None,
     };
 
-    let sink = CDEventsSink::new_mock();
+    let sink = MockEventSink::new();
 
     // Old status: Preview phase
     let old_status = Some(RolloutStatus {

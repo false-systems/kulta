@@ -2,12 +2,10 @@
 //! See the project documentation for specification.
 
 use crate::crd::rollout::{Rollout, RolloutStatus};
+use async_trait::async_trait;
 use cloudevents::Event;
 use serde_json::json;
 use thiserror::Error;
-
-#[cfg(test)]
-use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Error)]
 pub enum CDEventsError {
@@ -15,33 +13,33 @@ pub enum CDEventsError {
     Generic(String),
 }
 
-/// CDEvents sink for emitting events
-pub struct CDEventsSink {
-    #[cfg(not(test))]
-    enabled: bool,
-    #[cfg(not(test))]
-    sink_url: Option<String>,
-    #[cfg(test)]
-    mock_events: Arc<Mutex<Vec<Event>>>,
+/// Trait for sending CDEvents
+///
+/// Production code uses `HttpEventSink` which sends events via HTTP POST.
+/// Tests use `MockEventSink` which stores events in memory for assertions.
+#[async_trait]
+pub trait EventSink: Send + Sync {
+    async fn send(&self, event: &Event) -> Result<(), CDEventsError>;
 }
 
-#[cfg(not(test))]
-impl Default for CDEventsSink {
+/// Production event sink that sends CloudEvents via HTTP POST
+pub struct HttpEventSink {
+    enabled: bool,
+    sink_url: Option<String>,
+}
+
+impl Default for HttpEventSink {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CDEventsSink {
-    /// Create a new CDEvents sink (production mode)
+impl HttpEventSink {
+    /// Create a new HTTP event sink (production mode)
     ///
     /// Configuration from environment variables:
     /// - KULTA_CDEVENTS_ENABLED: "true" to enable CDEvents emission (default: false)
     /// - KULTA_CDEVENTS_SINK_URL: HTTP endpoint URL for CloudEvents (optional)
-    ///
-    /// # Returns
-    /// A CDEventsSink configured from environment variables
-    #[cfg(not(test))]
     pub fn new() -> Self {
         let enabled = std::env::var("KULTA_CDEVENTS_ENABLED")
             .unwrap_or_else(|_| "false".to_string())
@@ -49,31 +47,13 @@ impl CDEventsSink {
 
         let sink_url = std::env::var("KULTA_CDEVENTS_SINK_URL").ok();
 
-        CDEventsSink { enabled, sink_url }
+        HttpEventSink { enabled, sink_url }
     }
+}
 
-    #[cfg(test)]
-    pub fn new_mock() -> Self {
-        CDEventsSink {
-            mock_events: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    #[cfg(test)]
-    #[allow(clippy::unwrap_used)] // Test helper can use unwrap
-    pub fn get_emitted_events(&self) -> Vec<Event> {
-        self.mock_events.lock().unwrap().clone()
-    }
-
-    #[cfg(test)]
-    #[allow(clippy::unwrap_used)] // Test helper can use unwrap
-    fn emit_event(&self, event: Event) {
-        self.mock_events.lock().unwrap().push(event);
-    }
-
-    /// Send CloudEvent to HTTP sink (production mode)
-    #[cfg(not(test))]
-    async fn send_event(&self, event: &Event) -> Result<(), CDEventsError> {
+#[async_trait]
+impl EventSink for HttpEventSink {
+    async fn send(&self, event: &Event) -> Result<(), CDEventsError> {
         if !self.enabled {
             return Ok(()); // CDEvents disabled, skip
         }
@@ -96,6 +76,43 @@ impl CDEventsSink {
     }
 }
 
+/// Mock event sink for testing - stores events in memory
+#[cfg(test)]
+pub struct MockEventSink {
+    events: std::sync::Arc<std::sync::Mutex<Vec<Event>>>,
+}
+
+#[cfg(test)]
+impl Default for MockEventSink {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+impl MockEventSink {
+    pub fn new() -> Self {
+        MockEventSink {
+            events: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    #[allow(clippy::unwrap_used)]
+    pub fn get_emitted_events(&self) -> Vec<Event> {
+        self.events.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl EventSink for MockEventSink {
+    async fn send(&self, event: &Event) -> Result<(), CDEventsError> {
+        #[allow(clippy::unwrap_used)]
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+
 /// Emit CDEvent based on status transition
 ///
 /// This function determines which CDEvent to emit based on the phase transition
@@ -104,17 +121,29 @@ pub async fn emit_status_change_event(
     rollout: &Rollout,
     old_status: &Option<RolloutStatus>,
     new_status: &RolloutStatus,
-    sink: &CDEventsSink,
+    sink: &dyn EventSink,
 ) -> Result<(), CDEventsError> {
     use crate::crd::rollout::Phase;
 
-    // Detect transition: None → Progressing/Completed/Preview = service.deployed
-    // (Simple strategy goes directly to Completed, Canary goes to Progressing, Blue-green goes to Preview)
+    // Detect transition: None → Progressing/Completed/Preview/Experimenting = service.deployed
+    // (Simple strategy goes directly to Completed, Canary goes to Progressing,
+    // Blue-green goes to Preview, A/B Testing goes to Experimenting)
     let is_initialization = old_status.is_none()
         && matches!(
             new_status.phase,
-            Some(Phase::Progressing) | Some(Phase::Completed) | Some(Phase::Preview)
+            Some(Phase::Progressing)
+                | Some(Phase::Completed)
+                | Some(Phase::Preview)
+                | Some(Phase::Experimenting)
         );
+
+    // Detect A/B experiment conclusion: Experimenting → Concluded
+    let is_experiment_concluded = match (old_status, &new_status.phase) {
+        (Some(old), Some(Phase::Concluded)) => {
+            matches!(old.phase, Some(Phase::Experimenting))
+        }
+        _ => false,
+    };
 
     // Detect step progression: Progressing → Progressing (different step)
     let is_step_progression = match (old_status, &new_status.phase) {
@@ -132,57 +161,31 @@ pub async fn emit_status_change_event(
     let is_completion = matches!(new_status.phase, Some(Phase::Completed));
 
     if is_initialization {
-        // Build service.deployed event
         let event = build_service_deployed_event(rollout, new_status)?;
-
-        // Emit to sink
-        #[cfg(test)]
-        sink.emit_event(event);
-        #[cfg(not(test))]
-        sink.send_event(&event).await?;
+        sink.send(&event).await?;
 
         // For simple strategy (direct to Completed), also emit service.published
         if is_completion {
             let event = build_service_published_event(rollout, new_status)?;
-            #[cfg(test)]
-            sink.emit_event(event);
-            #[cfg(not(test))]
-            sink.send_event(&event).await?;
+            sink.send(&event).await?;
         }
 
         Ok(())
     } else if is_step_progression {
-        // Build service.upgraded event
         let event = build_service_upgraded_event(rollout, new_status)?;
-
-        // Emit to sink
-        #[cfg(test)]
-        sink.emit_event(event);
-        #[cfg(not(test))]
-        sink.send_event(&event).await?;
-
+        sink.send(&event).await?;
         Ok(())
     } else if is_rollback {
-        // Build service.rolledback event
         let event = build_service_rolledback_event(rollout, new_status)?;
-
-        // Emit to sink
-        #[cfg(test)]
-        sink.emit_event(event);
-        #[cfg(not(test))]
-        sink.send_event(&event).await?;
-
+        sink.send(&event).await?;
+        Ok(())
+    } else if is_experiment_concluded {
+        let event = build_experiment_concluded_event(rollout, new_status)?;
+        sink.send(&event).await?;
         Ok(())
     } else if is_completion {
-        // Build service.published event
         let event = build_service_published_event(rollout, new_status)?;
-
-        // Emit to sink
-        #[cfg(test)]
-        sink.emit_event(event);
-        #[cfg(not(test))]
-        sink.send_event(&event).await?;
-
+        sink.send(&event).await?;
         Ok(())
     } else {
         // No event for other transitions (yet)
@@ -485,6 +488,134 @@ fn build_service_published_event(
     Ok(cloudevent)
 }
 
+/// Build experiment.concluded CDEvent
+///
+/// Uses service.published as the base event type with experiment-specific custom data.
+fn build_experiment_concluded_event(
+    rollout: &Rollout,
+    status: &RolloutStatus,
+) -> Result<Event, CDEventsError> {
+    use cdevents_sdk::latest::service_published;
+    use cdevents_sdk::{CDEvent, Subject};
+
+    let namespace = rollout
+        .metadata
+        .namespace
+        .as_ref()
+        .ok_or_else(|| CDEventsError::Generic("Rollout missing namespace".to_string()))?;
+    let name = rollout
+        .metadata
+        .name
+        .as_ref()
+        .ok_or_else(|| CDEventsError::Generic("Rollout missing name".to_string()))?;
+
+    let cdevent = CDEvent::from(
+        Subject::from(service_published::Content {
+            environment: Some(service_published::ContentEnvironment {
+                id: format!("{}/{}", namespace, name).try_into().map_err(|e| {
+                    CDEventsError::Generic(format!("Invalid environment id: {}", e))
+                })?,
+                source: Some(
+                    format!(
+                        "/apis/kulta.io/v1alpha1/namespaces/{}/rollouts/{}",
+                        namespace, name
+                    )
+                    .try_into()
+                    .map_err(|e| {
+                        CDEventsError::Generic(format!("Invalid environment source: {}", e))
+                    })?,
+                ),
+            }),
+        })
+        .with_id(
+            format!("/rollouts/{}/experiment-concluded", name)
+                .try_into()
+                .map_err(|e| CDEventsError::Generic(format!("Invalid subject id: {}", e)))?,
+        )
+        .with_source(
+            "https://kulta.io/controller"
+                .try_into()
+                .map_err(|e| CDEventsError::Generic(format!("Invalid subject source: {}", e)))?,
+        ),
+    )
+    .with_id(
+        uuid::Uuid::new_v4()
+            .to_string()
+            .try_into()
+            .map_err(|e| CDEventsError::Generic(format!("Invalid event id: {}", e)))?,
+    )
+    .with_source(
+        "https://kulta.io"
+            .try_into()
+            .map_err(|e| CDEventsError::Generic(format!("Invalid event source: {}", e)))?,
+    )
+    .with_custom_data(build_experiment_custom_data(rollout, status));
+
+    let cloudevent: Event = cdevent
+        .try_into()
+        .map_err(|e| CDEventsError::Generic(format!("Failed to convert to CloudEvent: {}", e)))?;
+
+    Ok(cloudevent)
+}
+
+/// Build experiment-specific custom data for CDEvents
+fn build_experiment_custom_data(rollout: &Rollout, status: &RolloutStatus) -> serde_json::Value {
+    let ab_experiment = status.ab_experiment.as_ref();
+
+    let winner = ab_experiment
+        .and_then(|ab| ab.winner.as_ref())
+        .map(|v| format!("{:?}", v))
+        .unwrap_or_else(|| "none".to_string());
+
+    let conclusion_reason = ab_experiment
+        .and_then(|ab| ab.conclusion_reason.as_ref())
+        .map(|r| format!("{:?}", r))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let results: Vec<serde_json::Value> = ab_experiment
+        .map(|ab| {
+            ab.results
+                .iter()
+                .map(|r| {
+                    json!({
+                        "name": r.name,
+                        "value_a": r.value_a,
+                        "value_b": r.value_b,
+                        "confidence": r.confidence,
+                        "is_significant": r.is_significant,
+                        "winner": r.winner
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    json!({
+        "kulta": {
+            "version": "v1",
+            "rollout": {
+                "name": rollout.metadata.name.as_deref().unwrap_or("unknown"),
+                "namespace": rollout.metadata.namespace.as_deref().unwrap_or("default"),
+                "uid": rollout.metadata.uid.as_deref().unwrap_or(""),
+                "generation": rollout.metadata.generation.unwrap_or(0)
+            },
+            "strategy": "ab-testing",
+            "experiment": {
+                "started_at": ab_experiment.map(|ab| ab.started_at.as_str()).unwrap_or(""),
+                "concluded_at": ab_experiment.and_then(|ab| ab.concluded_at.as_deref()).unwrap_or(""),
+                "sample_size_a": ab_experiment.and_then(|ab| ab.sample_size_a).unwrap_or(0),
+                "sample_size_b": ab_experiment.and_then(|ab| ab.sample_size_b).unwrap_or(0),
+                "winner": winner,
+                "conclusion_reason": conclusion_reason,
+                "metrics": results
+            },
+            "decision": {
+                "reason": "experiment_concluded"
+            }
+        }
+    })
+}
+
 /// Build KULTA customData for CDEvents
 fn build_kulta_custom_data(
     rollout: &Rollout,
@@ -495,6 +626,8 @@ fn build_kulta_custom_data(
         "canary"
     } else if rollout.spec.strategy.blue_green.is_some() {
         "blue-green"
+    } else if rollout.spec.strategy.ab_testing.is_some() {
+        "ab-testing"
     } else {
         "simple"
     };
