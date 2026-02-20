@@ -91,8 +91,10 @@ fn create_rollout(name: &str, namespace: &str, replicas: i32, image: &str) -> Ro
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![
                         CanaryStep {
@@ -145,8 +147,10 @@ fn create_rollout_with_pauses(
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![
                         CanaryStep {
@@ -798,8 +802,10 @@ async fn test_edge_minimal_steps(ctx: Context) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![
                         CanaryStep {

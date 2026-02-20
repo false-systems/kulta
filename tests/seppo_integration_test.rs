@@ -227,8 +227,10 @@ async fn test_canary_full_lifecycle(ctx: TestContext) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![
                         CanaryStep {
@@ -369,8 +371,10 @@ async fn test_canary_pause_and_promote(ctx: TestContext) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![
                         CanaryStep {
@@ -474,8 +478,10 @@ async fn test_status_decisions_tracking(ctx: TestContext) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![CanaryStep {
                         set_weight: Some(50),
@@ -564,11 +570,13 @@ async fn test_blue_green_promotion(ctx: TestContext) {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: format!("{}-active", name),
                     preview_service: format!("{}-preview", name),
+                    port: None,
                     auto_promotion_enabled: Some(false),
                     auto_promotion_seconds: None,
                     traffic_routing: None,
                     analysis: None,
                 }),
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -697,11 +705,13 @@ async fn test_blue_green_auto_promotion(ctx: TestContext) {
                 blue_green: Some(BlueGreenStrategy {
                     active_service: format!("{}-active", name),
                     preview_service: format!("{}-preview", name),
+                    port: None,
                     auto_promotion_enabled: Some(true),
                     auto_promotion_seconds: Some(5),
                     traffic_routing: None,
                     analysis: None,
                 }),
+                ab_testing: None,
             },
 
             max_surge: None,
@@ -774,8 +784,10 @@ async fn test_httproute_weight_updates(ctx: TestContext) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![
                         CanaryStep {
@@ -899,6 +911,7 @@ async fn test_simple_strategy_lifecycle(ctx: TestContext) {
             strategy: RolloutStrategy {
                 canary: None,
                 blue_green: None,
+                ab_testing: None,
                 simple: Some(SimpleStrategy { analysis: None }),
             },
 
@@ -978,8 +991,10 @@ async fn test_image_update_triggers_rollout(ctx: TestContext) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![CanaryStep {
                         set_weight: Some(50),
@@ -1028,8 +1043,10 @@ async fn test_image_update_triggers_rollout(ctx: TestContext) {
             strategy: RolloutStrategy {
                 simple: None,
                 blue_green: None,
+                ab_testing: None,
                 canary: Some(CanaryStrategy {
                     stable_service: format!("{}-stable", name),
+                    port: None,
                     canary_service: format!("{}-canary", name),
                     steps: vec![CanaryStep {
                         set_weight: Some(50),

@@ -2,8 +2,8 @@ use futures::StreamExt;
 use kube::runtime::controller::Action;
 use kube::runtime::{watcher, Controller};
 use kube::{Api, Client};
-use kulta::controller::cdevents::CDEventsSink;
-use kulta::controller::prometheus::PrometheusClient;
+use kulta::controller::cdevents::HttpEventSink;
+use kulta::controller::prometheus::HttpPrometheusClient;
 use kulta::controller::{reconcile, Context, ReconcileError};
 use kulta::crd::rollout::Rollout;
 use kulta::server::{
@@ -205,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     let rollouts = Api::<Rollout>::all(client.clone());
 
     // Create CDEvents sink (configured from env vars)
-    let cdevents_sink = CDEventsSink::new();
+    let cdevents_sink = HttpEventSink::new();
     info!(
         enabled = std::env::var("KULTA_CDEVENTS_ENABLED").unwrap_or_else(|_| "false".to_string()),
         "CDEvents sink configured"
@@ -216,11 +216,15 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("KULTA_PROMETHEUS_ADDRESS").unwrap_or_else(|_| "".to_string());
     let prometheus_client = if prometheus_address.is_empty() {
         info!("Prometheus address not configured - metrics analysis disabled");
-        PrometheusClient::new("http://localhost:9090".to_string()) // Dummy address, metrics will be skipped
+        HttpPrometheusClient::new("http://localhost:9090".to_string()) // Dummy address, metrics will be skipped
     } else {
         info!(address = %prometheus_address, "Prometheus client configured");
-        PrometheusClient::new(prometheus_address)
+        HttpPrometheusClient::new(prometheus_address)
     };
+
+    // Create clock for time-dependent logic
+    let clock: Arc<dyn kulta::controller::clock::Clock> =
+        Arc::new(kulta::controller::clock::SystemClock);
 
     // Create controller context (with metrics for observability)
     let ctx = if leader_election_enabled {
@@ -228,6 +232,7 @@ async fn main() -> anyhow::Result<()> {
             client.clone(),
             cdevents_sink,
             prometheus_client,
+            clock,
             leader_state.clone(),
             Some(metrics.clone()),
         ))
@@ -236,6 +241,7 @@ async fn main() -> anyhow::Result<()> {
             client.clone(),
             cdevents_sink,
             prometheus_client,
+            clock,
             Some(metrics.clone()),
         ))
     };

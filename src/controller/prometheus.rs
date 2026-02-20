@@ -2,6 +2,7 @@
 //!
 //! This module handles querying Prometheus and evaluating metrics against thresholds.
 
+use async_trait::async_trait;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -23,10 +24,78 @@ pub enum PrometheusError {
     InvalidValue(String),
 }
 
+/// Trait for querying Prometheus metrics
+///
+/// Production code uses `HttpPrometheusClient` which queries a real Prometheus server.
+/// Tests use `MockPrometheusClient` which returns preconfigured responses.
+#[async_trait]
+pub trait MetricsQuerier: Send + Sync {
+    /// Execute instant query against Prometheus
+    async fn query_instant(&self, query: &str) -> Result<f64, PrometheusError>;
+
+    /// Downcast support for testing (allows accessing mock-specific methods)
+    fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Evaluate a metric by name against threshold
+    async fn evaluate_metric(
+        &self,
+        metric_name: &str,
+        rollout_name: &str,
+        revision: &str,
+        threshold: f64,
+    ) -> Result<bool, PrometheusError> {
+        let query = match metric_name {
+            "error-rate" => build_error_rate_query(rollout_name, revision),
+            "latency-p95" => build_latency_p95_query(rollout_name, revision),
+            _ => {
+                return Err(PrometheusError::InvalidQuery(format!(
+                    "Unknown metric template: {}",
+                    metric_name
+                )))
+            }
+        };
+        let value = self.query_instant(&query).await?;
+        Ok(value < threshold)
+    }
+
+    /// Evaluate all metrics from analysis config
+    async fn evaluate_all_metrics(
+        &self,
+        metrics: &[crate::crd::rollout::MetricConfig],
+        rollout_name: &str,
+        revision: &str,
+    ) -> Result<bool, PrometheusError> {
+        if metrics.is_empty() {
+            return Ok(true);
+        }
+        for metric in metrics {
+            let is_healthy = self
+                .evaluate_metric(&metric.name, rollout_name, revision, metric.threshold)
+                .await?;
+            if !is_healthy {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Query A/B variant error rate
+    async fn query_ab_error_rate(&self, service_name: &str) -> Result<f64, PrometheusError> {
+        let query = build_ab_error_rate_query(service_name);
+        self.query_instant(&query).await
+    }
+
+    /// Query A/B variant sample count
+    async fn query_ab_sample_count(&self, service_name: &str) -> Result<i64, PrometheusError> {
+        let query = build_ab_sample_count_query(service_name);
+        let count = self.query_instant(&query).await?;
+        Ok(count as i64)
+    }
+}
+
 /// Build PromQL query for error rate metric
 ///
 /// Calculates: (5xx errors / total requests) * 100
-#[allow(dead_code)] // Used in tests, will be used in production metrics analysis
 fn build_error_rate_query(rollout_name: &str, revision: &str) -> String {
     format!(
         r#"sum(rate(http_requests_total{{status=~"5..",rollout="{}",revision="{}"}}[2m])) / sum(rate(http_requests_total{{rollout="{}",revision="{}"}}[2m])) * 100"#,
@@ -34,10 +103,29 @@ fn build_error_rate_query(rollout_name: &str, revision: &str) -> String {
     )
 }
 
+/// Build PromQL query for A/B variant error rate
+///
+/// Queries by service name (variant_a_service or variant_b_service)
+pub fn build_ab_error_rate_query(service_name: &str) -> String {
+    format!(
+        r#"sum(rate(http_requests_total{{status=~"5..",service="{}"}}[5m])) / sum(rate(http_requests_total{{service="{}"}}[5m]))"#,
+        service_name, service_name
+    )
+}
+
+/// Build PromQL query for A/B variant sample count
+///
+/// Returns total request count for a service
+pub fn build_ab_sample_count_query(service_name: &str) -> String {
+    format!(
+        r#"sum(increase(http_requests_total{{service="{}"}}[1h]))"#,
+        service_name
+    )
+}
+
 /// Build PromQL query for latency p95 metric
 ///
 /// Uses histogram_quantile to calculate 95th percentile
-#[allow(dead_code)] // Used in tests, will be used in production metrics analysis
 fn build_latency_p95_query(rollout_name: &str, revision: &str) -> String {
     format!(
         r#"histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{{rollout="{}",revision="{}"}}[2m]))"#,
@@ -47,29 +135,22 @@ fn build_latency_p95_query(rollout_name: &str, revision: &str) -> String {
 
 /// Prometheus instant query response format
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Used in parse_prometheus_instant_query, will be used in production
 struct PrometheusResponse {
     status: String,
     data: PrometheusData,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Used in parse_prometheus_instant_query, will be used in production
 struct PrometheusData {
     result: Vec<PrometheusResult>,
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)] // Used in parse_prometheus_instant_query, will be used in production
 struct PrometheusResult {
     value: (i64, String), // [timestamp, value_as_string]
 }
 
 /// Parse Prometheus instant query response and extract metric value
-///
-/// Parses the JSON response from Prometheus /api/v1/query endpoint
-/// and returns the first metric value as f64.
-#[allow(dead_code)] // Used in tests, will be used in production metrics analysis
 fn parse_prometheus_instant_query(json_response: &str) -> Result<f64, PrometheusError> {
     let response: PrometheusResponse = serde_json::from_str(json_response)
         .map_err(|e| PrometheusError::ParseError(format!("Invalid JSON: {}", e)))?;
@@ -104,43 +185,25 @@ fn parse_prometheus_instant_query(json_response: &str) -> Result<f64, Prometheus
     Ok(value)
 }
 
-/// Prometheus client for executing queries
+/// Production Prometheus client that queries a real server
 #[derive(Clone)]
-pub struct PrometheusClient {
-    #[cfg(not(test))]
+pub struct HttpPrometheusClient {
     address: String,
-    #[cfg(test)]
-    mock_response: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
-impl PrometheusClient {
-    /// Create new Prometheus client
-    #[cfg(not(test))]
+impl HttpPrometheusClient {
     pub fn new(address: String) -> Self {
         Self { address }
     }
+}
 
-    /// Create mock client for testing
-    #[cfg(test)]
-    pub fn new_mock() -> Self {
-        Self {
-            mock_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
-        }
+#[async_trait]
+impl MetricsQuerier for HttpPrometheusClient {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 
-    /// Set mock response for testing
-    #[cfg(test)]
-    pub fn set_mock_response(&self, response: String) {
-        if let Ok(mut mock) = self.mock_response.lock() {
-            *mock = Some(response);
-        }
-    }
-
-    /// Execute instant query against Prometheus
-    ///
-    /// Queries the /api/v1/query endpoint and returns the first metric value.
-    #[cfg(not(test))]
-    pub async fn query_instant(&self, query: &str) -> Result<f64, PrometheusError> {
+    async fn query_instant(&self, query: &str) -> Result<f64, PrometheusError> {
         let url = format!("{}/api/v1/query", self.address);
         let client = reqwest::Client::new();
 
@@ -158,10 +221,45 @@ impl PrometheusClient {
 
         parse_prometheus_instant_query(&body)
     }
+}
 
-    /// Execute instant query (mock version for tests)
-    #[cfg(test)]
-    pub async fn query_instant(&self, _query: &str) -> Result<f64, PrometheusError> {
+/// Mock Prometheus client for testing
+#[cfg(test)]
+#[derive(Clone)]
+pub struct MockPrometheusClient {
+    mock_response: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+#[cfg(test)]
+impl Default for MockPrometheusClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+impl MockPrometheusClient {
+    pub fn new() -> Self {
+        Self {
+            mock_response: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    pub fn set_mock_response(&self, response: String) {
+        if let Ok(mut mock) = self.mock_response.lock() {
+            *mock = Some(response);
+        }
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl MetricsQuerier for MockPrometheusClient {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    async fn query_instant(&self, _query: &str) -> Result<f64, PrometheusError> {
         let mock = self
             .mock_response
             .lock()
@@ -171,95 +269,12 @@ impl PrometheusClient {
             .ok_or_else(|| PrometheusError::HttpError("No mock response set".to_string()))?;
         parse_prometheus_instant_query(response)
     }
-
-    /// Evaluate a metric by name against threshold
-    ///
-    /// Builds the appropriate PromQL query from the metric name template,
-    /// executes it, and compares the result to the threshold.
-    ///
-    /// # Arguments
-    /// * `metric_name` - Template name ("error-rate", "latency-p95", "latency-p99")
-    /// * `rollout_name` - Name of the rollout
-    /// * `revision` - Revision label ("canary" or "stable")
-    /// * `threshold` - Threshold value (metric must be below this)
-    ///
-    /// # Returns
-    /// * `Ok(true)` - Metric is healthy (below threshold)
-    /// * `Ok(false)` - Metric is unhealthy (above or equal to threshold)
-    /// * `Err(_)` - Query execution failed
-    pub async fn evaluate_metric(
-        &self,
-        metric_name: &str,
-        rollout_name: &str,
-        revision: &str,
-        threshold: f64,
-    ) -> Result<bool, PrometheusError> {
-        // Build query from template
-        let query = match metric_name {
-            "error-rate" => build_error_rate_query(rollout_name, revision),
-            "latency-p95" => build_latency_p95_query(rollout_name, revision),
-            _ => {
-                return Err(PrometheusError::InvalidQuery(format!(
-                    "Unknown metric template: {}",
-                    metric_name
-                )))
-            }
-        };
-
-        // Execute query
-        let value = self.query_instant(&query).await?;
-
-        // Compare to threshold (healthy if < threshold)
-        Ok(value < threshold)
-    }
-
-    /// Evaluate all metrics from analysis config
-    ///
-    /// Iterates through all metrics and evaluates each one.
-    /// Returns Ok(true) only if ALL metrics are healthy.
-    ///
-    /// # Arguments
-    /// * `metrics` - List of metrics from Rollout's analysis config
-    /// * `rollout_name` - Name of the rollout
-    /// * `revision` - Revision label ("canary" or "stable")
-    ///
-    /// # Returns
-    /// * `Ok(true)` - All metrics healthy (below thresholds)
-    /// * `Ok(false)` - One or more metrics unhealthy
-    /// * `Err(_)` - Query execution failed
-    pub async fn evaluate_all_metrics(
-        &self,
-        metrics: &[crate::crd::rollout::MetricConfig],
-        rollout_name: &str,
-        revision: &str,
-    ) -> Result<bool, PrometheusError> {
-        // Empty metrics list = no constraints = healthy
-        if metrics.is_empty() {
-            return Ok(true);
-        }
-
-        // Evaluate each metric
-        for metric in metrics {
-            let is_healthy = self
-                .evaluate_metric(&metric.name, rollout_name, revision, metric.threshold)
-                .await?;
-
-            // If ANY metric is unhealthy, return false immediately
-            if !is_healthy {
-                return Ok(false);
-            }
-        }
-
-        // All metrics passed
-        Ok(true)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // TDD Cycle 2 Part 1: RED - Test building PromQL query from template
     #[test]
     fn test_build_error_rate_query() {
         let rollout_name = "my-app";
@@ -267,7 +282,6 @@ mod tests {
 
         let query = build_error_rate_query(rollout_name, revision);
 
-        // Should build query that calculates error rate for canary pods
         assert!(query.contains("http_requests_total"));
         assert!(query.contains(r#"status=~"5..""#));
         assert!(query.contains(rollout_name));
@@ -281,17 +295,14 @@ mod tests {
 
         let query = build_latency_p95_query(rollout_name, revision);
 
-        // Should use histogram_quantile for p95
         assert!(query.contains("histogram_quantile"));
         assert!(query.contains("0.95"));
         assert!(query.contains(rollout_name));
         assert!(query.contains(revision));
     }
 
-    // TDD Cycle 2 Part 2: RED - Test parsing Prometheus instant query response
     #[test]
     fn test_parse_prometheus_response_with_data() {
-        // Valid Prometheus instant query response
         let json_response = r#"{
             "status": "success",
             "data": {
@@ -313,7 +324,6 @@ mod tests {
 
     #[test]
     fn test_parse_prometheus_response_no_data() {
-        // Empty result (no data points)
         let json_response = r#"{
             "status": "success",
             "data": {
@@ -334,12 +344,10 @@ mod tests {
         assert!(matches!(result, Err(PrometheusError::ParseError(_))));
     }
 
-    // TDD Cycle 2 Part 3: RED - Test executing Prometheus query
     #[tokio::test]
     async fn test_prometheus_client_query_instant() {
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock successful response
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -354,7 +362,6 @@ mod tests {
         }"#;
         client.set_mock_response(mock_response.to_string());
 
-        // Execute query
         let query = "rate(http_requests_total[2m])";
         let result = client.query_instant(query).await;
 
@@ -366,9 +373,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_prometheus_client_query_no_data() {
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock empty response
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -384,12 +390,10 @@ mod tests {
         assert!(matches!(result, Err(PrometheusError::NoData)));
     }
 
-    // TDD Cycle 3 Part 2: RED - Test evaluating error-rate metric
     #[tokio::test]
     async fn test_evaluate_error_rate_healthy() {
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock response: error rate = 2.5% (healthy, below threshold)
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -404,7 +408,6 @@ mod tests {
         }"#;
         client.set_mock_response(mock_response.to_string());
 
-        // Evaluate error-rate metric with threshold = 5.0
         let rollout_name = "my-app";
         let revision = "canary";
         let threshold = 5.0;
@@ -421,9 +424,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_error_rate_unhealthy() {
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock response: error rate = 8.0% (unhealthy, exceeds threshold)
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -438,7 +440,6 @@ mod tests {
         }"#;
         client.set_mock_response(mock_response.to_string());
 
-        // Evaluate error-rate metric with threshold = 5.0
         let rollout_name = "my-app";
         let revision = "canary";
         let threshold = 5.0;
@@ -453,14 +454,12 @@ mod tests {
         }
     }
 
-    // TDD Cycle 3 Part 3: RED - Test evaluating all metrics from config
     #[tokio::test]
     async fn test_evaluate_all_metrics_all_healthy() {
         use crate::crd::rollout::MetricConfig;
 
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock response: error rate = 2.5% (healthy)
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -475,7 +474,6 @@ mod tests {
         }"#;
         client.set_mock_response(mock_response.to_string());
 
-        // Define metrics to evaluate
         let metrics = vec![
             MetricConfig {
                 name: "error-rate".to_string(),
@@ -510,9 +508,8 @@ mod tests {
     async fn test_evaluate_all_metrics_one_unhealthy() {
         use crate::crd::rollout::MetricConfig;
 
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock response: error rate = 8.0% (unhealthy)
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -527,7 +524,6 @@ mod tests {
         }"#;
         client.set_mock_response(mock_response.to_string());
 
-        // Define metrics (error-rate will be unhealthy)
         let metrics = vec![MetricConfig {
             name: "error-rate".to_string(),
             threshold: 5.0,
@@ -554,9 +550,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_all_metrics_empty_list() {
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Empty metrics list should be considered healthy (nothing to fail)
         let metrics = vec![];
         let rollout_name = "my-app";
         let revision = "canary";
@@ -573,9 +568,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_evaluate_metric_at_exactly_threshold_is_unhealthy() {
-        let client = PrometheusClient::new_mock();
+        let client = MockPrometheusClient::new();
 
-        // Mock response: error rate = 5.0% (exactly at threshold)
         let mock_response = r#"{
             "status": "success",
             "data": {
@@ -590,7 +584,6 @@ mod tests {
         }"#;
         client.set_mock_response(mock_response.to_string());
 
-        // Evaluate error-rate metric with threshold = 5.0
         let rollout_name = "my-app";
         let revision = "canary";
         let threshold = 5.0;
@@ -599,8 +592,6 @@ mod tests {
             .evaluate_metric("error-rate", rollout_name, revision, threshold)
             .await;
 
-        // Exactly at threshold should be UNHEALTHY (triggers rollback)
-        // This is intentional: value < threshold means healthy, value >= threshold means unhealthy
         match result {
             Ok(is_healthy) => assert!(
                 !is_healthy,
@@ -612,7 +603,6 @@ mod tests {
 
     #[test]
     fn test_parse_prometheus_response_nan_returns_error() {
-        // Prometheus can return "NaN" as value when there's no data in the time window
         let json_response = r#"{
             "status": "success",
             "data": {
@@ -635,7 +625,6 @@ mod tests {
 
     #[test]
     fn test_parse_prometheus_response_infinity_returns_error() {
-        // Prometheus can return "+Inf" or "-Inf" for division by zero
         let json_response = r#"{
             "status": "success",
             "data": {

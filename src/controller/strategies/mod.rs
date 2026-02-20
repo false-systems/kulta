@@ -4,7 +4,9 @@
 //! - SimpleStrategy: Standard rolling update with observability
 //! - CanaryStrategy: Progressive traffic shifting with gradual rollout
 //! - BlueGreenStrategy: Instant cutover between two full environments
+//! - ABTestingStrategy: Header/cookie-based routing for A/B experiments
 
+pub mod ab_testing;
 pub mod blue_green;
 pub mod canary;
 pub mod simple;
@@ -12,6 +14,7 @@ pub mod simple;
 use crate::controller::rollout::{build_gateway_api_backend_refs, Context};
 use crate::crd::rollout::{GatewayAPIRouting, Rollout, RolloutStatus};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use gateway_api::apis::standard::httproutes::HTTPRouteRulesBackendRefs;
 use kube::api::{Api, Patch, PatchParams};
 use kube::core::DynamicObject;
@@ -282,7 +285,7 @@ pub trait RolloutStrategy: Send + Sync {
     /// # Purity
     /// This function is pure - it has no side effects and always returns
     /// the same output for the same input.
-    fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus;
+    fn compute_next_status(&self, rollout: &Rollout, now: DateTime<Utc>) -> RolloutStatus;
 
     /// Does this strategy support metrics-based analysis?
     ///
@@ -319,14 +322,16 @@ pub trait RolloutStrategy: Send + Sync {
 /// ```
 pub fn select_strategy(rollout: &Rollout) -> Box<dyn RolloutStrategy> {
     use crate::controller::strategies::{
-        blue_green::BlueGreenStrategyHandler, canary::CanaryStrategyHandler,
-        simple::SimpleStrategyHandler,
+        ab_testing::ABTestingStrategyHandler, blue_green::BlueGreenStrategyHandler,
+        canary::CanaryStrategyHandler, simple::SimpleStrategyHandler,
     };
 
     if rollout.spec.strategy.simple.is_some() {
         Box::new(SimpleStrategyHandler)
     } else if rollout.spec.strategy.blue_green.is_some() {
         Box::new(BlueGreenStrategyHandler)
+    } else if rollout.spec.strategy.ab_testing.is_some() {
+        Box::new(ABTestingStrategyHandler)
     } else {
         // Default to canary (most common)
         Box::new(CanaryStrategyHandler)
@@ -370,6 +375,7 @@ mod tests {
             simple: Some(SimpleStrategy { analysis: None }),
             canary: None,
             blue_green: None,
+            ab_testing: None,
         });
 
         let strategy = select_strategy(&rollout);
@@ -384,11 +390,13 @@ mod tests {
             blue_green: Some(BlueGreenStrategy {
                 active_service: "app-active".to_string(),
                 preview_service: "app-preview".to_string(),
+                port: None,
                 auto_promotion_enabled: None,
                 auto_promotion_seconds: None,
                 traffic_routing: None,
                 analysis: None,
             }),
+            ab_testing: None,
         });
 
         let strategy = select_strategy(&rollout);
@@ -402,11 +410,13 @@ mod tests {
             canary: Some(CanaryStrategy {
                 canary_service: "app-canary".to_string(),
                 stable_service: "app-stable".to_string(),
+                port: None,
                 steps: vec![],
                 traffic_routing: None,
                 analysis: None,
             }),
             blue_green: None,
+            ab_testing: None,
         });
 
         let strategy = select_strategy(&rollout);
@@ -419,9 +429,40 @@ mod tests {
             simple: None,
             canary: None,
             blue_green: None,
+            ab_testing: None,
         });
 
         let strategy = select_strategy(&rollout);
         assert_eq!(strategy.name(), "canary");
+    }
+
+    #[test]
+    fn test_select_strategy_ab_testing() {
+        use crate::crd::rollout::{ABHeaderMatch, ABMatch, ABStrategy};
+
+        let rollout = create_test_rollout(RolloutStrategySpec {
+            simple: None,
+            canary: None,
+            blue_green: None,
+            ab_testing: Some(ABStrategy {
+                variant_a_service: "app-variant-a".to_string(),
+                variant_b_service: "app-variant-b".to_string(),
+                port: None,
+                variant_b_match: ABMatch {
+                    header: Some(ABHeaderMatch {
+                        name: "X-Variant".to_string(),
+                        value: "B".to_string(),
+                        match_type: None,
+                    }),
+                    cookie: None,
+                },
+                traffic_routing: None,
+                max_duration: None,
+                analysis: None,
+            }),
+        });
+
+        let strategy = select_strategy(&rollout);
+        assert_eq!(strategy.name(), "ab-testing");
     }
 }

@@ -1,19 +1,17 @@
-name: Sykli CI
+name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-  # Sykli version to use
-  SYKLI_VERSION: "0.1.3"
+permissions:
+  contents: read
 
 jobs:
-  sykli:
-    name: Run Sykli Pipeline
+  ci:
+    name: CI (Sykli)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,25 +25,22 @@ jobs:
         with:
           shared-key: "kulta-sykli"
 
-      - name: Setup Elixir
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: '1.17'
-          otp-version: '26'
+      - name: Install sykli
+        run: curl -fsSL https://raw.githubusercontent.com/yairfalse/sykli/main/install.sh | bash
 
-      - name: Download Sykli
+      - name: Run sykli
+        run: ~/.local/bin/sykli
+
+  status:
+    name: CI Status
+    runs-on: ubuntu-latest
+    needs: [ci]
+    if: always()
+    steps:
+      - name: Check results
         run: |
-          # Download sykli binary from releases
-          curl -L -o sykli "https://github.com/yairfalse/sykli/releases/download/v${SYKLI_VERSION}/sykli-linux-x86_64"
-          chmod +x sykli
-          sudo mv sykli /usr/local/bin/
-
-      - name: Build sykli.rs pipeline definition
-        run: cargo build --bin sykli --features sykli --release
-
-      - name: Run Sykli Pipeline
-        run: |
-          # Generate pipeline JSON and run it
-          ./target/release/sykli --emit | sykli run -
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          if [ "${{ needs.ci.result }}" == "failure" ]; then
+            echo "CI failed"
+            exit 1
+          fi
+          echo "All checks passed"

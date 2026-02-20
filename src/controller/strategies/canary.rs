@@ -9,6 +9,7 @@ use crate::controller::rollout::{
 };
 use crate::crd::rollout::{Rollout, RolloutStatus};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use k8s_openapi::api::apps::v1::ReplicaSet;
 use kube::api::Api;
 use kube::ResourceExt;
@@ -102,13 +103,13 @@ impl RolloutStrategy for CanaryStrategyHandler {
         reconcile_gateway_api_traffic(rollout, ctx, "canary").await
     }
 
-    fn compute_next_status(&self, rollout: &Rollout) -> RolloutStatus {
+    fn compute_next_status(&self, rollout: &Rollout, now: DateTime<Utc>) -> RolloutStatus {
         // Use the existing compute_desired_status function which handles:
         // - Initialization
         // - Step progression
         // - Pause logic
         // - Completion detection
-        compute_desired_status(rollout)
+        compute_desired_status(rollout, now)
     }
 
     fn supports_metrics_analysis(&self) -> bool {
@@ -152,6 +153,7 @@ mod tests {
                     canary: Some(CanaryStrategy {
                         canary_service: "app-canary".to_string(),
                         stable_service: "app-stable".to_string(),
+                        port: None,
                         steps,
                         traffic_routing: Some(TrafficRouting {
                             gateway_api: Some(GatewayAPIRouting {
@@ -161,6 +163,7 @@ mod tests {
                         analysis: None,
                     }),
                     blue_green: None,
+                    ab_testing: None,
                 },
 
                 max_surge: None,
@@ -179,6 +182,7 @@ mod tests {
                 step_start_time: None,
                 progress_started_at: None,
                 decisions: vec![],
+                ab_experiment: None,
             }),
         }
     }
@@ -218,7 +222,7 @@ mod tests {
         let rollout = create_canary_rollout(3, None, steps);
         let strategy = CanaryStrategyHandler;
 
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         // Should initialize to step 0 with 10% weight
         assert_eq!(status.phase, Some(Phase::Progressing));
@@ -241,7 +245,7 @@ mod tests {
         let rollout = create_canary_rollout(3, Some(10), steps);
         let strategy = CanaryStrategyHandler;
 
-        let status = strategy.compute_next_status(&rollout);
+        let status = strategy.compute_next_status(&rollout, Utc::now());
 
         // Should progress to step 1 (100% weight = completed)
         assert_eq!(status.phase, Some(Phase::Completed));

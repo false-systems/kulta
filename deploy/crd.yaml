@@ -133,6 +133,160 @@ spec:
               strategy:
                 description: Deployment strategy (currently only canary)
                 properties:
+                  abTesting:
+                    description: A/B Testing deployment strategy
+                    nullable: true
+                    properties:
+                      analysis:
+                        description: Analysis configuration for statistical comparison
+                        nullable: true
+                        properties:
+                          confidenceLevel:
+                            description: 'Statistical confidence level (default: 0.95)'
+                            format: double
+                            nullable: true
+                            type: number
+                          metrics:
+                            default: []
+                            description: Metrics to compare between variants
+                            items:
+                              description: Metric configuration for A/B comparison
+                              properties:
+                                direction:
+                                  description: 'Direction: "lower" (B should be lower)
+                                    or "higher" (B should be higher)
+
+                                    Determines which variant "wins" if statistically
+                                    significant'
+                                  enum:
+                                  - lower
+                                  - higher
+                                  type: string
+                                minEffectSize:
+                                  description: 'Minimum effect size to consider meaningful
+                                    (optional)
+
+                                    E.g., 0.05 means B must be at least 5% better'
+                                  format: double
+                                  nullable: true
+                                  type: number
+                                name:
+                                  description: Metric name/template (error-rate, latency-p95,
+                                    conversion-rate)
+                                  type: string
+                              required:
+                              - direction
+                              - name
+                              type: object
+                            type: array
+                          minDuration:
+                            description: 'Minimum experiment duration before statistical
+                              evaluation starts
+
+                              Ensures sufficient data collection (e.g., "1h", "30m")'
+                            nullable: true
+                            type: string
+                          minSampleSize:
+                            description: 'Minimum sample size per variant before evaluation
+
+                              Prevents premature conclusions'
+                            format: int32
+                            nullable: true
+                            type: integer
+                          prometheus:
+                            description: Prometheus configuration
+                            nullable: true
+                            properties:
+                              address:
+                                description: Prometheus server address (e.g., "http://prometheus:9090")
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      maxDuration:
+                        description: 'Maximum experiment duration before auto-conclusion
+                          (safety limit)
+
+                          Format: "24h", "7d", etc.'
+                        nullable: true
+                        type: string
+                      port:
+                        description: 'Service port for traffic routing (default: 80)'
+                        format: int32
+                        nullable: true
+                        type: integer
+                      trafficRouting:
+                        description: Traffic routing configuration (Gateway API HTTPRoute)
+                        nullable: true
+                        properties:
+                          gatewayAPI:
+                            description: Gateway API configuration (KULTA-specific)
+                            nullable: true
+                            properties:
+                              httpRoute:
+                                description: Name of the HTTPRoute to manipulate
+                                type: string
+                            required:
+                            - httpRoute
+                            type: object
+                        type: object
+                      variantAService:
+                        description: Name of the service that receives variant-a traffic
+                          (control group)
+                        type: string
+                      variantBMatch:
+                        description: 'Match conditions for routing to variant B
+
+                          Requests matching these conditions go to variant B; others
+                          go to variant A'
+                        properties:
+                          cookie:
+                            description: Cookie-based matching (e.g., ab_variant=B)
+                            nullable: true
+                            properties:
+                              name:
+                                description: Cookie name (e.g., "ab_variant")
+                                type: string
+                              value:
+                                description: Cookie value to match (e.g., "B")
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          header:
+                            description: 'Header-based matching (e.g., X-Variant:
+                              B)'
+                            nullable: true
+                            properties:
+                              name:
+                                description: Header name (e.g., "X-Variant")
+                                type: string
+                              type:
+                                description: 'Match type: Exact (default) or RegularExpression'
+                                enum:
+                                - Exact
+                                - RegularExpression
+                                - null
+                                nullable: true
+                                type: string
+                              value:
+                                description: Header value to match (e.g., "B")
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                        type: object
+                      variantBService:
+                        description: Name of the service that receives variant-b traffic
+                          (experiment group)
+                        type: string
+                    required:
+                    - variantAService
+                    - variantBMatch
+                    - variantBService
+                    type: object
                   blueGreen:
                     description: Blue-Green deployment strategy
                     nullable: true
@@ -216,6 +370,11 @@ spec:
                         type: boolean
                       autoPromotionSeconds:
                         description: Seconds to wait before auto-promoting (if autoPromotionEnabled)
+                        format: int32
+                        nullable: true
+                        type: integer
+                      port:
+                        description: 'Service port for traffic routing (default: 80)'
                         format: int32
                         nullable: true
                         type: integer
@@ -318,6 +477,11 @@ spec:
                       canaryService:
                         description: Name of the service that selects canary pods
                         type: string
+                      port:
+                        description: 'Service port for traffic routing (default: 80)'
+                        format: int32
+                        nullable: true
+                        type: integer
                       stableService:
                         description: Name of the service that selects stable pods
                         type: string
@@ -9528,6 +9692,98 @@ spec:
             description: Status of the Rollout
             nullable: true
             properties:
+              abExperiment:
+                description: A/B experiment status (only for abTesting strategy)
+                nullable: true
+                properties:
+                  concludedAt:
+                    description: When the experiment concluded (RFC3339), if concluded
+                    nullable: true
+                    type: string
+                  conclusionReason:
+                    anyOf:
+                    - description: Reason for A/B experiment conclusion
+                      enum:
+                      - SignificanceReached
+                      - MaxDurationExceeded
+                      - ManualConclusion
+                      - ConsensusReached
+                      type: string
+                    - enum:
+                      - null
+                      nullable: true
+                    description: Reason the experiment concluded
+                  results:
+                    description: Statistical results per metric
+                    items:
+                      description: Result for a single A/B metric comparison
+                      properties:
+                        confidence:
+                          description: Statistical confidence level achieved (0.0
+                            to 1.0)
+                          format: double
+                          type: number
+                        isSignificant:
+                          description: Whether the difference is statistically significant
+                          type: boolean
+                        name:
+                          description: Metric name
+                          type: string
+                        valueA:
+                          description: Value for variant A
+                          format: double
+                          type: number
+                        valueB:
+                          description: Value for variant B
+                          format: double
+                          type: number
+                        winner:
+                          anyOf:
+                          - description: A/B experiment variant identifier
+                            enum:
+                            - A
+                            - B
+                            type: string
+                          - enum:
+                            - null
+                            nullable: true
+                          description: Which variant won for this metric, or None
+                            if inconclusive
+                      required:
+                      - confidence
+                      - isSignificant
+                      - name
+                      - valueA
+                      - valueB
+                      type: object
+                    type: array
+                  sampleSizeA:
+                    description: Current sample count for variant A
+                    format: int64
+                    nullable: true
+                    type: integer
+                  sampleSizeB:
+                    description: Current sample count for variant B
+                    format: int64
+                    nullable: true
+                    type: integer
+                  startedAt:
+                    description: When the experiment started (RFC3339)
+                    type: string
+                  winner:
+                    anyOf:
+                    - description: A/B experiment variant identifier
+                      enum:
+                      - A
+                      - B
+                      type: string
+                    - enum:
+                      - null
+                      nullable: true
+                    description: Overall winner (if concluded with significance)
+                required:
+                - startedAt
+                type: object
               currentStepIndex:
                 description: Current canary step index (0-indexed)
                 format: int32
@@ -9628,6 +9884,8 @@ spec:
                   - Progressing
                   - Paused
                   - Preview
+                  - Experimenting
+                  - Concluded
                   - Completed
                   - Failed
                   type: string
@@ -9790,6 +10048,160 @@ spec:
               strategy:
                 description: Deployment strategy
                 properties:
+                  abTesting:
+                    description: A/B Testing deployment strategy
+                    nullable: true
+                    properties:
+                      analysis:
+                        description: Analysis configuration for statistical comparison
+                        nullable: true
+                        properties:
+                          confidenceLevel:
+                            description: 'Statistical confidence level (default: 0.95)'
+                            format: double
+                            nullable: true
+                            type: number
+                          metrics:
+                            default: []
+                            description: Metrics to compare between variants
+                            items:
+                              description: Metric configuration for A/B comparison
+                              properties:
+                                direction:
+                                  description: 'Direction: "lower" (B should be lower)
+                                    or "higher" (B should be higher)
+
+                                    Determines which variant "wins" if statistically
+                                    significant'
+                                  enum:
+                                  - lower
+                                  - higher
+                                  type: string
+                                minEffectSize:
+                                  description: 'Minimum effect size to consider meaningful
+                                    (optional)
+
+                                    E.g., 0.05 means B must be at least 5% better'
+                                  format: double
+                                  nullable: true
+                                  type: number
+                                name:
+                                  description: Metric name/template (error-rate, latency-p95,
+                                    conversion-rate)
+                                  type: string
+                              required:
+                              - direction
+                              - name
+                              type: object
+                            type: array
+                          minDuration:
+                            description: 'Minimum experiment duration before statistical
+                              evaluation starts
+
+                              Ensures sufficient data collection (e.g., "1h", "30m")'
+                            nullable: true
+                            type: string
+                          minSampleSize:
+                            description: 'Minimum sample size per variant before evaluation
+
+                              Prevents premature conclusions'
+                            format: int32
+                            nullable: true
+                            type: integer
+                          prometheus:
+                            description: Prometheus configuration
+                            nullable: true
+                            properties:
+                              address:
+                                description: Prometheus server address (e.g., "http://prometheus:9090")
+                                nullable: true
+                                type: string
+                            type: object
+                        type: object
+                      maxDuration:
+                        description: 'Maximum experiment duration before auto-conclusion
+                          (safety limit)
+
+                          Format: "24h", "7d", etc.'
+                        nullable: true
+                        type: string
+                      port:
+                        description: 'Service port for traffic routing (default: 80)'
+                        format: int32
+                        nullable: true
+                        type: integer
+                      trafficRouting:
+                        description: Traffic routing configuration (Gateway API HTTPRoute)
+                        nullable: true
+                        properties:
+                          gatewayAPI:
+                            description: Gateway API configuration (KULTA-specific)
+                            nullable: true
+                            properties:
+                              httpRoute:
+                                description: Name of the HTTPRoute to manipulate
+                                type: string
+                            required:
+                            - httpRoute
+                            type: object
+                        type: object
+                      variantAService:
+                        description: Name of the service that receives variant-a traffic
+                          (control group)
+                        type: string
+                      variantBMatch:
+                        description: 'Match conditions for routing to variant B
+
+                          Requests matching these conditions go to variant B; others
+                          go to variant A'
+                        properties:
+                          cookie:
+                            description: Cookie-based matching (e.g., ab_variant=B)
+                            nullable: true
+                            properties:
+                              name:
+                                description: Cookie name (e.g., "ab_variant")
+                                type: string
+                              value:
+                                description: Cookie value to match (e.g., "B")
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                          header:
+                            description: 'Header-based matching (e.g., X-Variant:
+                              B)'
+                            nullable: true
+                            properties:
+                              name:
+                                description: Header name (e.g., "X-Variant")
+                                type: string
+                              type:
+                                description: 'Match type: Exact (default) or RegularExpression'
+                                enum:
+                                - Exact
+                                - RegularExpression
+                                - null
+                                nullable: true
+                                type: string
+                              value:
+                                description: Header value to match (e.g., "B")
+                                type: string
+                            required:
+                            - name
+                            - value
+                            type: object
+                        type: object
+                      variantBService:
+                        description: Name of the service that receives variant-b traffic
+                          (experiment group)
+                        type: string
+                    required:
+                    - variantAService
+                    - variantBMatch
+                    - variantBService
+                    type: object
                   blueGreen:
                     description: Blue-Green deployment strategy
                     nullable: true
@@ -9873,6 +10285,11 @@ spec:
                         type: boolean
                       autoPromotionSeconds:
                         description: Seconds to wait before auto-promoting (if autoPromotionEnabled)
+                        format: int32
+                        nullable: true
+                        type: integer
+                      port:
+                        description: 'Service port for traffic routing (default: 80)'
                         format: int32
                         nullable: true
                         type: integer
@@ -9975,6 +10392,11 @@ spec:
                       canaryService:
                         description: Name of the service that selects canary pods
                         type: string
+                      port:
+                        description: 'Service port for traffic routing (default: 80)'
+                        format: int32
+                        nullable: true
+                        type: integer
                       stableService:
                         description: Name of the service that selects stable pods
                         type: string
@@ -19185,6 +19607,98 @@ spec:
             description: Status of the Rollout
             nullable: true
             properties:
+              abExperiment:
+                description: A/B experiment status (only for abTesting strategy)
+                nullable: true
+                properties:
+                  concludedAt:
+                    description: When the experiment concluded (RFC3339), if concluded
+                    nullable: true
+                    type: string
+                  conclusionReason:
+                    anyOf:
+                    - description: Reason for A/B experiment conclusion
+                      enum:
+                      - SignificanceReached
+                      - MaxDurationExceeded
+                      - ManualConclusion
+                      - ConsensusReached
+                      type: string
+                    - enum:
+                      - null
+                      nullable: true
+                    description: Reason the experiment concluded
+                  results:
+                    description: Statistical results per metric
+                    items:
+                      description: Result for a single A/B metric comparison
+                      properties:
+                        confidence:
+                          description: Statistical confidence level achieved (0.0
+                            to 1.0)
+                          format: double
+                          type: number
+                        isSignificant:
+                          description: Whether the difference is statistically significant
+                          type: boolean
+                        name:
+                          description: Metric name
+                          type: string
+                        valueA:
+                          description: Value for variant A
+                          format: double
+                          type: number
+                        valueB:
+                          description: Value for variant B
+                          format: double
+                          type: number
+                        winner:
+                          anyOf:
+                          - description: A/B experiment variant identifier
+                            enum:
+                            - A
+                            - B
+                            type: string
+                          - enum:
+                            - null
+                            nullable: true
+                          description: Which variant won for this metric, or None
+                            if inconclusive
+                      required:
+                      - confidence
+                      - isSignificant
+                      - name
+                      - valueA
+                      - valueB
+                      type: object
+                    type: array
+                  sampleSizeA:
+                    description: Current sample count for variant A
+                    format: int64
+                    nullable: true
+                    type: integer
+                  sampleSizeB:
+                    description: Current sample count for variant B
+                    format: int64
+                    nullable: true
+                    type: integer
+                  startedAt:
+                    description: When the experiment started (RFC3339)
+                    type: string
+                  winner:
+                    anyOf:
+                    - description: A/B experiment variant identifier
+                      enum:
+                      - A
+                      - B
+                      type: string
+                    - enum:
+                      - null
+                      nullable: true
+                    description: Overall winner (if concluded with significance)
+                required:
+                - startedAt
+                type: object
               currentStepIndex:
                 description: Current canary step index (0-indexed)
                 format: int32
@@ -19285,6 +19799,8 @@ spec:
                   - Progressing
                   - Paused
                   - Preview
+                  - Experimenting
+                  - Concluded
                   - Completed
                   - Failed
                   type: string

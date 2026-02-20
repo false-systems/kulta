@@ -59,6 +59,9 @@ async-trait = "0.1"
 # Prometheus metrics
 prometheus = "0.13"
 
+# FALSE Protocol (ULID generation for occurrence IDs)
+ulid = "1"
+
 [dev-dependencies]
 serde_yaml = "0.9"
 x509-parser = "0.17"
