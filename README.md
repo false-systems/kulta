@@ -3,7 +3,7 @@
 **Kubernetes Progressive Delivery Controller**
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.83%2B-orange.svg)](https://www.rust-lang.org)
 [![Tests](https://img.shields.io/badge/tests-294%2B-green.svg)]()
 
 A Kubernetes controller for progressive delivery, written in Rust. Supports canary, blue-green, A/B testing, and simple rolling updates with Gateway API traffic routing, Prometheus metrics-based rollback, and CDEvents/FALSE Protocol observability.
@@ -16,14 +16,14 @@ Part of the [False Systems](https://github.com/false-systems) toolchain.
 
 | Feature | Description |
 |---------|-------------|
-| **Canary Deployments** | Gradual traffic shifting with configurable steps and pauses |
-| **Blue-Green Deployments** | Instant traffic cutover between active and preview environments |
-| **A/B Testing** | Header/cookie-based routing with Z-test statistical significance analysis |
-| **Simple Rolling Updates** | Standard rollout with observability |
-| **Gateway API** | Native HTTPRoute traffic splitting (no service mesh required) |
-| **Metrics-Based Rollback** | Automatic rollback via Prometheus (error rate, latency) |
-| **CDEvents** | CNCF-standard deployment lifecycle events |
-| **FALSE Protocol** | AI-native occurrence emission for AIOps observability |
+| **Canary Deployments** | Gradual traffic shifting (0% -> 20% -> 50% -> 100%) with configurable steps |
+| **Blue-Green Deployments** | Instant traffic cutover between two full environments |
+| **A/B Testing** | Statistical significance analysis (Z-test) with header/cookie-based routing |
+| **Simple Rolling Updates** | Standard Kubernetes rolling update with observability |
+| **Gateway API Traffic Routing** | Native HTTPRoute weight-based traffic splitting (no service mesh required) |
+| **Metrics-Based Rollback** | Automatic rollback via Prometheus (error rate, latency thresholds) |
+| **CDEvents Observability** | CNCF-standard deployment events for pipeline integration |
+| **FALSE Protocol** | AI-native occurrence emission for AIOps tooling (AHTI/Kerto) |
 | **Leader Election** | HA-ready with Kubernetes Lease-based leader election |
 | **Time-Based Pauses** | Configurable wait durations between steps |
 | **Manual Promotion** | Annotation-based promotion for human-in-the-loop workflows |
@@ -48,7 +48,11 @@ kubectl apply -f deploy/crd.yaml
 RUST_LOG=info cargo run
 ```
 
-**Requirements:** Rust 1.85+, Kubernetes 1.28+, Gateway API v1.0+ CRDs
+**Requirements:**
+- Rust 1.85+
+- Kubernetes 1.28+
+- Gateway API v1.0+ CRDs installed
+- A Gateway API implementation (Envoy Gateway, NGINX Gateway Fabric, Contour, etc.)
 
 ---
 
@@ -317,7 +321,10 @@ skaffold dev
 | Service Mesh Required | No | No | No (with Gateway API) |
 | A/B Testing | Yes | Yes | Yes |
 | CDEvents | Yes | No | No |
-| FALSE Protocol | Yes | No | No |
+| Metrics Analysis | Prometheus | Prometheus/Datadog/etc | Prometheus/Datadog/etc |
+| Blue-Green | Yes | Yes | Yes |
+| Canary | Yes | Yes | Yes |
+| A/B Testing | Yes | Yes | Yes |
 
 ---
 
