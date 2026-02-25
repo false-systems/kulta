@@ -4008,10 +4008,7 @@ async fn test_evaluate_ab_max_duration_exceeded() {
 
     assert!(result.should_conclude);
     assert!(result.winner.is_none());
-    assert_eq!(
-        result.reason,
-        Some(ABConclusionReason::MaxDurationExceeded)
-    );
+    assert_eq!(result.reason, Some(ABConclusionReason::MaxDurationExceeded));
 }
 
 /// Max duration NOT exceeded → continues to analysis
@@ -4098,14 +4095,8 @@ async fn test_evaluate_ab_prometheus_sample_query_failure() {
     let prom = MockPrometheusClient::new();
     prom.enqueue_error(crate::controller::prometheus::PrometheusError::NoData);
 
-    let rollout = create_ab_rollout_with_analysis(
-        &started,
-        Phase::Experimenting,
-        None,
-        None,
-        None,
-        None,
-    );
+    let rollout =
+        create_ab_rollout_with_analysis(&started, Phase::Experimenting, None, None, None, None);
     let ctx = create_test_context_with_prometheus(prom, now);
 
     let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
@@ -4124,14 +4115,8 @@ async fn test_evaluate_ab_prometheus_error_rate_failure() {
     prom.enqueue_response(1000.0); // sample B
     prom.enqueue_error(crate::controller::prometheus::PrometheusError::NoData); // rate A fails
 
-    let rollout = create_ab_rollout_with_analysis(
-        &started,
-        Phase::Experimenting,
-        None,
-        None,
-        None,
-        None,
-    );
+    let rollout =
+        create_ab_rollout_with_analysis(&started, Phase::Experimenting, None, None, None, None);
     let ctx = create_test_context_with_prometheus(prom, now);
 
     let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
@@ -4205,14 +4190,8 @@ async fn test_evaluate_ab_no_significance() {
 async fn test_evaluate_ab_no_analysis_config() {
     let now = Utc::now();
     let started = (now - chrono::Duration::hours(1)).to_rfc3339();
-    let mut rollout = create_ab_rollout_with_analysis(
-        &started,
-        Phase::Experimenting,
-        None,
-        None,
-        None,
-        None,
-    );
+    let mut rollout =
+        create_ab_rollout_with_analysis(&started, Phase::Experimenting, None, None, None, None);
     // Remove the analysis config
     if let Some(ab) = &mut rollout.spec.strategy.ab_testing {
         ab.analysis = None;

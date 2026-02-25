@@ -59,8 +59,8 @@ async-trait = "0.1"
 # Prometheus metrics
 prometheus = "0.13"
 
-# FALSE Protocol (ULID generation for occurrence IDs)
-ulid = "1"
+# FALSE Protocol occurrence types
+false-protocol = { path = "../false-protocol/rust" }
 
 [dev-dependencies]
 serde_yaml = "0.9"

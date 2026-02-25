@@ -113,7 +113,7 @@ cargo fmt && cargo clippy -- -D warnings && cargo test
 | `axum` 0.8 | HTTP server |
 | `cdevents-sdk` | CDEvents emission |
 | `reqwest` | HTTP client |
-| `ulid` | ULID generation for FALSE Protocol |
+| `false-protocol` | FALSE Protocol occurrence types |
 | `chrono` | Timestamp handling |
 | `thiserror` | Error types |
 | `async-trait` | Async trait support |

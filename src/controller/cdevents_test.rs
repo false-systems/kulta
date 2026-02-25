@@ -845,12 +845,12 @@ async fn test_emit_experiment_concluded_event() {
     let kulta = &json["customData"]["kulta"];
     assert_eq!(kulta["strategy"], "ab-testing");
     assert_eq!(kulta["experiment"]["winner"], "B");
-    assert_eq!(
-        kulta["experiment"]["conclusion_reason"],
-        "ConsensusReached"
-    );
+    assert_eq!(kulta["experiment"]["conclusion_reason"], "ConsensusReached");
     assert_eq!(kulta["experiment"]["sample_size_a"], 5000);
-    assert!(!kulta["experiment"]["metrics"].as_array().unwrap().is_empty());
+    assert!(!kulta["experiment"]["metrics"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 // Test A/B initialization event (None → Experimenting = service.deployed)

@@ -484,20 +484,16 @@ mod tests {
 
     #[test]
     fn test_calculate_ab_significance_both_zero_rates() {
-        let result = calculate_ab_significance(
-            0.0, 0.0, 10000, 10000, 0.95,
-            &ABMetricDirection::Lower,
-        );
+        let result =
+            calculate_ab_significance(0.0, 0.0, 10000, 10000, 0.95, &ABMetricDirection::Lower);
         assert!(!result.is_significant);
         assert!((result.effect_size - 0.0).abs() < 0.001);
     }
 
     #[test]
     fn test_calculate_ab_significance_rate_a_zero_rate_b_positive() {
-        let result = calculate_ab_significance(
-            0.0, 0.05, 10000, 10000, 0.95,
-            &ABMetricDirection::Lower,
-        );
+        let result =
+            calculate_ab_significance(0.0, 0.05, 10000, 10000, 0.95, &ABMetricDirection::Lower);
         // effect_size should be 1.0 when rate_a is 0 and rate_b > 0
         assert!((result.effect_size - 1.0).abs() < 0.001);
     }
@@ -506,10 +502,7 @@ mod tests {
     fn test_calculate_ab_significance_se_zero_guard() {
         // Both rates identical and non-zero with same sample sizes → se could be very small
         // but with truly identical rates, z_score = 0, so not significant
-        let result = calculate_ab_significance(
-            0.5, 0.5, 100, 100, 0.95,
-            &ABMetricDirection::Lower,
-        );
+        let result = calculate_ab_significance(0.5, 0.5, 100, 100, 0.95, &ABMetricDirection::Lower);
         assert!(!result.is_significant);
     }
 

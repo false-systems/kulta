@@ -7,135 +7,17 @@
 //! cross-tool correlation by AHTI.
 //!
 //! KULTA emits both CDEvents (standard) and FALSE Protocol occurrences (AHTI integration).
+//!
+//! Types are provided by the `false-protocol` crate — KULTA only contains
+//! the mapping logic from rollout state to occurrences.
 
 use crate::controller::clock::Clock;
 use crate::crd::rollout::{Phase, Rollout};
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use false_protocol::{Entity, Error as OccurrenceError, Occurrence, Outcome, Severity};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tracing::warn;
-
-/// FALSE Protocol occurrence
-#[derive(Debug, Serialize)]
-pub struct Occurrence {
-    pub id: String,
-    pub timestamp: String,
-    pub source: String,
-    #[serde(rename = "type")]
-    pub occurrence_type: String,
-    pub severity: Severity,
-    pub outcome: Outcome,
-    pub context: OccurrenceContext,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<OccurrenceError>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<Reasoning>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub history: Option<History>,
-    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
-    pub data: HashMap<String, serde_json::Value>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub entities: Vec<Entity>,
-}
-
-/// Severity levels
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum Severity {
-    Debug,
-    Info,
-    Warning,
-    Error,
-    Critical,
-}
-
-/// Outcome of the occurrence
-#[derive(Debug, Serialize, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum Outcome {
-    Success,
-    Failure,
-    Timeout,
-    InProgress,
-    Unknown,
-}
-
-/// Occurrence context
-#[derive(Debug, Serialize)]
-pub struct OccurrenceContext {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub correlation_keys: Vec<CorrelationKey>,
-}
-
-/// Correlation key for cross-tool linking
-#[derive(Debug, Serialize)]
-pub struct CorrelationKey {
-    #[serde(rename = "type")]
-    pub key_type: String,
-    pub value: String,
-}
-
-/// AI-native error block
-#[derive(Debug, Default, Serialize)]
-pub struct OccurrenceError {
-    pub code: String,
-    pub what_failed: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub why_it_matters: Option<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub possible_causes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub suggested_fix: Option<String>,
-}
-
-/// AI-native reasoning block
-#[derive(Debug, Serialize)]
-pub struct Reasoning {
-    pub summary: String,
-    pub explanation: String,
-    pub confidence: f64,
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub recommendations: Vec<String>,
-}
-
-/// History of steps taken
-#[derive(Debug, Serialize)]
-pub struct History {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
-    pub steps: Vec<HistoryStep>,
-}
-
-/// Individual step in history
-#[derive(Debug, Serialize)]
-pub struct HistoryStep {
-    pub description: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// Entity reference with version tracking
-#[derive(Debug, Serialize)]
-pub struct Entity {
-    #[serde(rename = "type")]
-    pub entity_type: String,
-    pub id: String,
-    pub name: String,
-    pub version: String,
-    pub observed_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_of_truth: Option<String>,
-}
 
 /// Map phase transition to occurrence type suffix
 ///
@@ -215,7 +97,10 @@ pub fn emit_occurrence(
         }
     };
     let now = clock.now();
-    let occurrence = build_occurrence(rollout, old_phase, new_phase, strategy, now);
+    let occurrence = match build_occurrence(rollout, old_phase, new_phase, strategy, now) {
+        Some(occ) => occ,
+        None => return,
+    };
 
     let json = match serde_json::to_string(&occurrence) {
         Ok(j) => j,
@@ -232,15 +117,18 @@ pub fn emit_occurrence(
     }
 }
 
-/// Build an occurrence from rollout state
+/// Build an occurrence from rollout state.
+///
+/// Returns `None` if the crate's validation rejects the occurrence type
+/// (should not happen with well-formed strategy names, but we never
+/// fail reconciliation on occurrence emission).
 fn build_occurrence(
     rollout: &Rollout,
     old_phase: Option<&Phase>,
     new_phase: &Phase,
     strategy: &str,
     now: DateTime<Utc>,
-) -> Occurrence {
-    // name and namespace are validated by emit_occurrence before calling this
+) -> Option<Occurrence> {
     let name = rollout.metadata.name.as_deref().unwrap_or("unknown");
     let namespace = rollout.metadata.namespace.as_deref().unwrap_or("unknown");
     let uid = rollout.metadata.uid.as_deref().unwrap_or("");
@@ -281,46 +169,46 @@ fn build_occurrence(
                 "Check metrics for {} and consider manual rollback",
                 name
             )),
+            ..Default::default()
         })
     } else {
         None
     };
 
-    Occurrence {
-        id: ulid::Ulid::new().to_string(),
-        timestamp: now.to_rfc3339(),
-        source: "kulta".to_string(),
-        occurrence_type: occurrence_type.to_string(),
-        severity,
-        outcome,
-        context: OccurrenceContext {
-            cluster: std::env::var("KULTA_CLUSTER_NAME").ok(),
-            namespace: Some(namespace.to_string()),
-            correlation_keys: vec![
-                CorrelationKey {
-                    key_type: "deployment".to_string(),
-                    value: name.to_string(),
-                },
-                CorrelationKey {
-                    key_type: "namespace".to_string(),
-                    value: namespace.to_string(),
-                },
-            ],
-        },
-        error,
-        reasoning: None, // AHTI adds reasoning, not KULTA
-        history: None,
-        data,
-        entities: vec![Entity {
-            entity_type: "rollout".to_string(),
-            id: uid.to_string(),
-            name: name.to_string(),
-            version: resource_version.to_string(),
-            observed_at: now.to_rfc3339(),
-            namespace: Some(namespace.to_string()),
-            source_of_truth: Some("k8s-api".to_string()),
-        }],
+    let mut entity = Entity::from_k8s("rollout", uid, name, namespace, resource_version);
+    entity.observed_at = now;
+
+    let mut occ = match Occurrence::new("kulta", &occurrence_type) {
+        Ok(o) => o,
+        Err(errs) => {
+            warn!(
+                errors = ?errs,
+                occurrence_type = %occurrence_type,
+                "Failed to construct FALSE Protocol occurrence (non-fatal)"
+            );
+            return None;
+        }
+    };
+
+    occ.timestamp = now;
+    occ = occ
+        .severity(severity)
+        .outcome(outcome)
+        .in_namespace(namespace)
+        .correlate("deployment", name)
+        .correlate("namespace", namespace)
+        .with_entity(entity)
+        .with_data(data);
+
+    if let Ok(cluster) = std::env::var("KULTA_CLUSTER_NAME") {
+        occ = occ.in_cluster(&cluster);
     }
+
+    if let Some(err) = error {
+        occ = occ.with_error(err);
+    }
+
+    Some(occ)
 }
 
 /// Get the occurrence output directory.
@@ -428,12 +316,10 @@ mod tests {
             phase_to_occurrence_suffix(Some(&Phase::Progressing), &Phase::Paused),
             "paused"
         );
-        // Concluded maps to completed
         assert_eq!(
             phase_to_occurrence_suffix(Some(&Phase::Experimenting), &Phase::Concluded),
             "completed"
         );
-        // Paused from non-Progressing phase still maps to paused
         assert_eq!(
             phase_to_occurrence_suffix(Some(&Phase::Preview), &Phase::Paused),
             "paused"
@@ -442,22 +328,18 @@ mod tests {
 
     #[test]
     fn test_build_occurrence_type_strategy_prefixes() {
-        // Canary strategy
         assert_eq!(
             build_occurrence_type("canary", None, &Phase::Progressing),
             "canary.rollout.progressing"
         );
-        // Blue-green strategy
         assert_eq!(
             build_occurrence_type("blue_green", None, &Phase::Completed),
             "bluegreen.rollout.completed"
         );
-        // A/B testing strategy
         assert_eq!(
             build_occurrence_type("ab_testing", Some(&Phase::Experimenting), &Phase::Failed),
             "abtesting.rollout.failed"
         );
-        // Simple strategy
         assert_eq!(
             build_occurrence_type("simple", None, &Phase::Completed),
             "rolling.rollout.completed"
@@ -469,16 +351,16 @@ mod tests {
         let rollout = test_rollout();
         let now = Utc::now();
 
-        let occ = build_occurrence(&rollout, None, &Phase::Progressing, "canary", now);
+        let occ = build_occurrence(&rollout, None, &Phase::Progressing, "canary", now).unwrap();
 
         assert_eq!(occ.source, "kulta");
         assert_eq!(occ.occurrence_type, "canary.rollout.progressing");
-        assert!(matches!(occ.severity, Severity::Info));
-        assert!(matches!(occ.outcome, Outcome::InProgress));
+        assert_eq!(occ.severity, Severity::Info);
+        assert_eq!(occ.outcome, Outcome::InProgress);
         assert!(occ.error.is_none());
-        assert_eq!(occ.entities.len(), 1);
-        assert_eq!(occ.entities[0].name, "my-app");
-        assert_eq!(occ.entities[0].version, "rv-456");
+        assert_eq!(occ.context.entities.len(), 1);
+        assert_eq!(occ.context.entities[0].name, "my-app");
+        assert_eq!(occ.context.entities[0].version, "rv-456");
         assert_eq!(occ.context.namespace.as_deref(), Some("production"));
     }
 
@@ -493,11 +375,12 @@ mod tests {
             &Phase::Failed,
             "canary",
             now,
-        );
+        )
+        .unwrap();
 
         assert_eq!(occ.occurrence_type, "canary.rollout.failed");
-        assert!(matches!(occ.severity, Severity::Error));
-        assert!(matches!(occ.outcome, Outcome::Failure));
+        assert_eq!(occ.severity, Severity::Error);
+        assert_eq!(occ.outcome, Outcome::Failure);
         assert!(occ.error.is_some());
         let err = occ.error.as_ref().unwrap();
         assert_eq!(err.code, "ROLLOUT_FAILED");
@@ -510,14 +393,14 @@ mod tests {
         let rollout = test_rollout();
         let now = Utc::now();
 
-        let occ = build_occurrence(&rollout, None, &Phase::Completed, "simple", now);
+        let occ = build_occurrence(&rollout, None, &Phase::Completed, "simple", now).unwrap();
         let json = serde_json::to_string(&occ).expect("Should serialize");
 
-        // Verify key fields present in JSON
         assert!(json.contains("\"source\":\"kulta\""));
         assert!(json.contains("\"type\":\"rolling.rollout.completed\""));
         assert!(json.contains("\"severity\":\"info\""));
         assert!(json.contains("\"outcome\":\"success\""));
+        assert!(json.contains("\"protocol_version\":\"1.0\""));
         // No error block for success
         assert!(!json.contains("\"error\""));
         // No reasoning (AHTI's job)
@@ -529,7 +412,7 @@ mod tests {
         let rollout = test_rollout();
         let now = Utc::now();
 
-        let occ = build_occurrence(&rollout, None, &Phase::Progressing, "canary", now);
+        let occ = build_occurrence(&rollout, None, &Phase::Progressing, "canary", now).unwrap();
 
         // ULID is 26 characters, uppercase alphanumeric
         assert_eq!(occ.id.len(), 26);
@@ -548,15 +431,15 @@ mod tests {
     #[test]
     fn test_build_occurrence_with_missing_metadata() {
         let mut rollout = test_rollout();
-        rollout.metadata = ObjectMeta::default(); // no name, namespace, uid, resource_version
+        rollout.metadata = ObjectMeta::default();
         let now = Utc::now();
 
-        let occ = build_occurrence(&rollout, None, &Phase::Progressing, "canary", now);
+        let occ = build_occurrence(&rollout, None, &Phase::Progressing, "canary", now).unwrap();
 
-        assert_eq!(occ.entities[0].name, "unknown");
+        assert_eq!(occ.context.entities[0].name, "unknown");
         assert_eq!(occ.context.namespace.as_deref(), Some("unknown"));
-        assert_eq!(occ.entities[0].id, ""); // uid defaults to ""
-        assert_eq!(occ.entities[0].version, "0"); // resource_version defaults to "0"
+        assert_eq!(occ.context.entities[0].id, "");
+        assert_eq!(occ.context.entities[0].version, "0");
     }
 
     #[test]
@@ -581,7 +464,6 @@ mod tests {
 
     #[test]
     fn test_phase_to_occurrence_suffix_initializing() {
-        // Initializing maps to "progressing" (catch-all)
         assert_eq!(
             phase_to_occurrence_suffix(None, &Phase::Initializing),
             "progressing"
@@ -611,7 +493,8 @@ mod tests {
             &Phase::Failed,
             "canary",
             now,
-        );
+        )
+        .unwrap();
 
         let err = occ.error.as_ref().unwrap();
         assert!(err.possible_causes[0].contains("High error rate"));
