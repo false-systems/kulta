@@ -118,6 +118,7 @@ fn create_rollout(name: &str, namespace: &str, replicas: i32, image: &str) -> Ro
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     }
@@ -180,6 +181,7 @@ fn create_rollout_with_pauses(
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     }
@@ -821,6 +823,7 @@ async fn test_edge_minimal_steps(ctx: Context) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };

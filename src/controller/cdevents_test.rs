@@ -38,6 +38,7 @@ async fn test_emit_service_deployed_on_initialization() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None, // No status yet - this is a new rollout
     };
@@ -139,6 +140,7 @@ async fn test_emit_service_upgraded_on_step_progression() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -247,6 +249,7 @@ async fn test_emit_service_rolledback_on_failure() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -361,6 +364,7 @@ async fn test_emit_service_published_on_completion() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -469,6 +473,7 @@ async fn test_cdevent_contains_kulta_custom_data() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -548,6 +553,7 @@ async fn test_simple_strategy_emits_deployed_and_published() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -623,6 +629,7 @@ async fn test_blue_green_emits_deployed_on_preview() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -701,6 +708,7 @@ async fn test_blue_green_emits_published_on_promotion() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -791,6 +799,7 @@ async fn test_emit_experiment_concluded_event() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             phase: Some(Phase::Experimenting),
@@ -816,6 +825,7 @@ async fn test_emit_experiment_concluded_event() {
             winner: Some(ABVariant::B),
             conclusion_reason: Some(ABConclusionReason::ConsensusReached),
         }),
+        last_decision_source: None,
         ..Default::default()
     };
 
@@ -845,12 +855,12 @@ async fn test_emit_experiment_concluded_event() {
     let kulta = &json["customData"]["kulta"];
     assert_eq!(kulta["strategy"], "ab-testing");
     assert_eq!(kulta["experiment"]["winner"], "B");
-    assert_eq!(
-        kulta["experiment"]["conclusion_reason"],
-        "ConsensusReached"
-    );
+    assert_eq!(kulta["experiment"]["conclusion_reason"], "ConsensusReached");
     assert_eq!(kulta["experiment"]["sample_size_a"], 5000);
-    assert!(!kulta["experiment"]["metrics"].as_array().unwrap().is_empty());
+    assert!(!kulta["experiment"]["metrics"]
+        .as_array()
+        .unwrap()
+        .is_empty());
 }
 
 // Test A/B initialization event (None → Experimenting = service.deployed)
@@ -893,6 +903,7 @@ async fn test_emit_service_deployed_on_ab_initialization() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None, // No previous status → initialization
     };

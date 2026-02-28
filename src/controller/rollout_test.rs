@@ -71,6 +71,7 @@ fn create_ab_rollout_with_analysis(
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             phase: Some(phase),
@@ -83,6 +84,7 @@ fn create_ab_rollout_with_analysis(
                 winner: None,
                 conclusion_reason: None,
             }),
+            last_decision_source: None,
             ..Default::default()
         }),
     }
@@ -133,6 +135,7 @@ fn create_test_rollout_with_simple() -> Rollout {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     }
@@ -193,6 +196,7 @@ fn create_test_rollout_with_blue_green() -> Rollout {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     }
@@ -282,6 +286,7 @@ fn test_ab_testing_creates_variant_replicasets() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -431,6 +436,7 @@ fn create_test_rollout_with_canary() -> Rollout {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     }
@@ -499,6 +505,7 @@ async fn test_reconcile_creates_stable_replicaset() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -616,6 +623,7 @@ async fn test_build_replicaset_spec() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -705,6 +713,7 @@ async fn test_reconcile_creates_canary_replicaset() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -800,6 +809,7 @@ async fn test_replicaset_has_kulta_managed_label() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -921,6 +931,7 @@ async fn test_build_both_stable_and_canary_replicasets() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -1056,6 +1067,7 @@ async fn test_calculate_traffic_weights_step0() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0), // First step: 20% canary
@@ -1109,6 +1121,7 @@ async fn test_calculate_traffic_weights_step1() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(1), // Second step: 50% canary
@@ -1156,6 +1169,7 @@ async fn test_calculate_traffic_weights_no_step() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None, // No status yet, default to 100% stable
     };
@@ -1206,6 +1220,7 @@ async fn test_calculate_traffic_weights_complete() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(1), // Last step: 100% canary
@@ -1253,6 +1268,7 @@ async fn test_calculate_traffic_weights_beyond_steps() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(5), // Beyond available steps (only 1 step)
@@ -1300,6 +1316,7 @@ async fn test_build_httproute_backend_weights() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0), // 20% canary
@@ -1365,6 +1382,7 @@ async fn test_convert_to_gateway_api_backend_refs() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0), // 20% canary
@@ -1422,6 +1440,7 @@ async fn test_gateway_api_backend_refs_no_canary_strategy() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -1473,6 +1492,7 @@ async fn test_initialize_rollout_status() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None, // No status yet - should be initialized
     };
@@ -1527,6 +1547,7 @@ async fn test_initialize_sets_progress_started_at() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -1587,6 +1608,7 @@ async fn test_should_progress_to_next_step() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1645,6 +1667,7 @@ async fn test_should_not_progress_when_paused() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1697,6 +1720,7 @@ async fn test_advance_to_next_step() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1762,6 +1786,7 @@ async fn test_advance_preserves_progress_started_at() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1821,6 +1846,7 @@ async fn test_advance_to_final_step() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1886,6 +1912,7 @@ async fn test_compute_desired_status_for_new_rollout() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None, // No status - should be initialized
     };
@@ -1939,6 +1966,7 @@ async fn test_compute_desired_status_progresses_step() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -1997,6 +2025,7 @@ async fn test_compute_desired_status_respects_pause() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -3148,6 +3177,7 @@ async fn test_evaluate_rollout_metrics_healthy() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -3236,6 +3266,7 @@ async fn test_evaluate_rollout_metrics_unhealthy() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -3309,6 +3340,7 @@ async fn test_evaluate_rollout_metrics_no_analysis_config() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             current_step_index: Some(0),
@@ -3391,6 +3423,7 @@ async fn test_evaluate_rollout_metrics_skips_during_warmup() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             replicas: 3,
@@ -3472,6 +3505,7 @@ async fn test_evaluate_rollout_metrics_runs_after_warmup() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             replicas: 3,
@@ -3552,6 +3586,7 @@ async fn test_evaluate_rollout_metrics_no_warmup_configured() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             replicas: 3,
@@ -3623,6 +3658,7 @@ async fn test_blue_green_builds_httproute_backend_refs() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             phase: Some(Phase::Preview),
@@ -3699,6 +3735,7 @@ async fn test_blue_green_httproute_after_promotion() {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: Some(RolloutStatus {
             phase: Some(Phase::Completed),
@@ -4008,10 +4045,7 @@ async fn test_evaluate_ab_max_duration_exceeded() {
 
     assert!(result.should_conclude);
     assert!(result.winner.is_none());
-    assert_eq!(
-        result.reason,
-        Some(ABConclusionReason::MaxDurationExceeded)
-    );
+    assert_eq!(result.reason, Some(ABConclusionReason::MaxDurationExceeded));
 }
 
 /// Max duration NOT exceeded → continues to analysis
@@ -4098,14 +4132,8 @@ async fn test_evaluate_ab_prometheus_sample_query_failure() {
     let prom = MockPrometheusClient::new();
     prom.enqueue_error(crate::controller::prometheus::PrometheusError::NoData);
 
-    let rollout = create_ab_rollout_with_analysis(
-        &started,
-        Phase::Experimenting,
-        None,
-        None,
-        None,
-        None,
-    );
+    let rollout =
+        create_ab_rollout_with_analysis(&started, Phase::Experimenting, None, None, None, None);
     let ctx = create_test_context_with_prometheus(prom, now);
 
     let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
@@ -4124,14 +4152,8 @@ async fn test_evaluate_ab_prometheus_error_rate_failure() {
     prom.enqueue_response(1000.0); // sample B
     prom.enqueue_error(crate::controller::prometheus::PrometheusError::NoData); // rate A fails
 
-    let rollout = create_ab_rollout_with_analysis(
-        &started,
-        Phase::Experimenting,
-        None,
-        None,
-        None,
-        None,
-    );
+    let rollout =
+        create_ab_rollout_with_analysis(&started, Phase::Experimenting, None, None, None, None);
     let ctx = create_test_context_with_prometheus(prom, now);
 
     let result = evaluate_ab_experiment(&rollout, &ctx).await.unwrap();
@@ -4205,14 +4227,8 @@ async fn test_evaluate_ab_no_significance() {
 async fn test_evaluate_ab_no_analysis_config() {
     let now = Utc::now();
     let started = (now - chrono::Duration::hours(1)).to_rfc3339();
-    let mut rollout = create_ab_rollout_with_analysis(
-        &started,
-        Phase::Experimenting,
-        None,
-        None,
-        None,
-        None,
-    );
+    let mut rollout =
+        create_ab_rollout_with_analysis(&started, Phase::Experimenting, None, None, None, None);
     // Remove the analysis config
     if let Some(ab) = &mut rollout.spec.strategy.ab_testing {
         ab.analysis = None;

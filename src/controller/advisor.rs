@@ -1,0 +1,279 @@
+//! AI advisor integration for progressive delivery decisions
+//!
+//! Follows the same trait-based pattern as `MetricsQuerier` (prometheus.rs):
+//! - `AnalysisAdvisor` trait for abstraction
+//! - `NoOpAdvisor` for Level 0/1 (no advisory calls)
+//! - `HttpAdvisor` for Level 2+ (calls external AI service)
+//! - `MockAdvisor` for testing
+//!
+//! The advisor never overrides threshold decisions at Level 2 — it only
+//! provides recommendations that are logged alongside the threshold result.
+
+use crate::crd::rollout::{Recommendation, RecommendedAction};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum AdvisorError {
+    #[error("Advisory service unreachable: {0}")]
+    Unreachable(String),
+
+    #[error("Advisory service returned invalid response: {0}")]
+    InvalidResponse(String),
+
+    #[error("Advisory call timed out after {0:?}")]
+    Timeout(Duration),
+}
+
+/// Everything the advisor needs to make a recommendation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisContext {
+    pub rollout_name: String,
+    pub namespace: String,
+    pub strategy: String,
+    pub current_step: Option<i32>,
+    pub current_weight: Option<i32>,
+    pub metrics_healthy: bool,
+    pub phase: String,
+    pub history: Vec<String>,
+}
+
+/// Trait for AI advisory integration
+///
+/// Production code uses `HttpAdvisor` which calls an external AI service.
+/// Tests use `MockAdvisor` which returns preconfigured responses.
+/// Default is `NoOpAdvisor` which returns Continue with zero confidence.
+#[async_trait]
+pub trait AnalysisAdvisor: Send + Sync {
+    /// Request a recommendation from the advisor
+    async fn advise(&self, context: &AnalysisContext) -> Result<Recommendation, AdvisorError>;
+
+    /// Downcast support for testing
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// No-op advisor for Level 0/1 (default)
+///
+/// Returns Continue with zero confidence — the threshold decision is used as-is.
+pub struct NoOpAdvisor;
+
+#[async_trait]
+impl AnalysisAdvisor for NoOpAdvisor {
+    async fn advise(&self, _ctx: &AnalysisContext) -> Result<Recommendation, AdvisorError> {
+        Ok(Recommendation {
+            action: RecommendedAction::Continue,
+            confidence: 0.0,
+            reasoning: "no advisor configured".into(),
+        })
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// HTTP-based advisor for Level 2+ (production)
+///
+/// Calls an external AI advisory service with rollout context
+/// and returns the recommendation. Times out gracefully.
+pub struct HttpAdvisor {
+    client: reqwest::Client,
+    endpoint: String,
+    timeout: Duration,
+}
+
+impl HttpAdvisor {
+    pub fn new(endpoint: String, timeout: Duration) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(timeout)
+            .build()
+            .unwrap_or_default();
+        Self {
+            client,
+            endpoint,
+            timeout,
+        }
+    }
+}
+
+#[async_trait]
+impl AnalysisAdvisor for HttpAdvisor {
+    async fn advise(&self, context: &AnalysisContext) -> Result<Recommendation, AdvisorError> {
+        let response = self
+            .client
+            .post(&self.endpoint)
+            .json(context)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_timeout() {
+                    AdvisorError::Timeout(self.timeout)
+                } else {
+                    AdvisorError::Unreachable(e.to_string())
+                }
+            })?;
+
+        let recommendation: Recommendation = response
+            .json()
+            .await
+            .map_err(|e| AdvisorError::InvalidResponse(e.to_string()))?;
+
+        Ok(recommendation)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Mock advisor for testing
+///
+/// Returns a preconfigured recommendation. Thread-safe via Arc<Mutex<>>.
+#[cfg(test)]
+pub struct MockAdvisor {
+    pub response: std::sync::Arc<std::sync::Mutex<Result<Recommendation, String>>>,
+    pub call_count: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+#[cfg(test)]
+impl MockAdvisor {
+    pub fn new(recommendation: Recommendation) -> Self {
+        Self {
+            response: std::sync::Arc::new(std::sync::Mutex::new(Ok(recommendation))),
+            call_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+
+    pub fn new_failing(error_msg: &str) -> Self {
+        Self {
+            response: std::sync::Arc::new(std::sync::Mutex::new(Err(error_msg.to_string()))),
+            call_count: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+
+    pub fn calls(&self) -> u32 {
+        self.call_count.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl AnalysisAdvisor for MockAdvisor {
+    async fn advise(&self, _ctx: &AnalysisContext) -> Result<Recommendation, AdvisorError> {
+        self.call_count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let guard = self
+            .response
+            .lock()
+            .map_err(|_| AdvisorError::Unreachable("lock poisoned".into()))?;
+
+        match &*guard {
+            Ok(rec) => Ok(rec.clone()),
+            Err(msg) => Err(AdvisorError::Unreachable(msg.clone())),
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_noop_advisor_returns_continue() {
+        let advisor = NoOpAdvisor;
+        let ctx = AnalysisContext {
+            rollout_name: "my-app".into(),
+            namespace: "default".into(),
+            strategy: "canary".into(),
+            current_step: Some(1),
+            current_weight: Some(20),
+            metrics_healthy: true,
+            phase: "Progressing".into(),
+            history: vec![],
+        };
+
+        let rec = advisor.advise(&ctx).await.unwrap();
+        assert_eq!(rec.action, RecommendedAction::Continue);
+        assert_eq!(rec.confidence, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_mock_advisor_returns_configured_response() {
+        let advisor = MockAdvisor::new(Recommendation {
+            action: RecommendedAction::Rollback,
+            confidence: 0.95,
+            reasoning: "high error rate detected".into(),
+        });
+
+        let ctx = AnalysisContext {
+            rollout_name: "my-app".into(),
+            namespace: "default".into(),
+            strategy: "canary".into(),
+            current_step: Some(2),
+            current_weight: Some(40),
+            metrics_healthy: false,
+            phase: "Progressing".into(),
+            history: vec![],
+        };
+
+        let rec = advisor.advise(&ctx).await.unwrap();
+        assert_eq!(rec.action, RecommendedAction::Rollback);
+        assert_eq!(rec.confidence, 0.95);
+        assert_eq!(advisor.calls(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_mock_advisor_tracks_call_count() {
+        let advisor = MockAdvisor::new(Recommendation {
+            action: RecommendedAction::Continue,
+            confidence: 0.8,
+            reasoning: "looks good".into(),
+        });
+
+        let ctx = AnalysisContext {
+            rollout_name: "test".into(),
+            namespace: "default".into(),
+            strategy: "canary".into(),
+            current_step: None,
+            current_weight: None,
+            metrics_healthy: true,
+            phase: "Progressing".into(),
+            history: vec![],
+        };
+
+        let _ = advisor.advise(&ctx).await;
+        let _ = advisor.advise(&ctx).await;
+        let _ = advisor.advise(&ctx).await;
+        assert_eq!(advisor.calls(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_mock_advisor_error() {
+        let advisor = MockAdvisor::new_failing("connection refused");
+
+        let ctx = AnalysisContext {
+            rollout_name: "test".into(),
+            namespace: "default".into(),
+            strategy: "canary".into(),
+            current_step: None,
+            current_weight: None,
+            metrics_healthy: true,
+            phase: "Progressing".into(),
+            history: vec![],
+        };
+
+        let result = advisor.advise(&ctx).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("connection refused"));
+    }
+}

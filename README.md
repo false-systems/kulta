@@ -33,8 +33,9 @@ Part of the [False Systems](https://github.com/false-systems) toolchain.
 ## Quick Start
 
 ```bash
-# Clone and build
+# Clone KULTA and its sibling dependency
 git clone https://github.com/false-systems/kulta
+git clone https://github.com/false-systems/false-protocol
 cd kulta
 cargo build --release
 

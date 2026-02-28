@@ -632,6 +632,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "false-protocol"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "ulid",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1386,6 +1397,7 @@ dependencies = [
  "cdevents-sdk",
  "chrono",
  "cloudevents-sdk",
+ "false-protocol",
  "futures",
  "gateway-api",
  "k8s-openapi",
@@ -1408,7 +1420,6 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
- "ulid",
  "uuid",
  "x509-parser",
 ]

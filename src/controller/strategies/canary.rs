@@ -169,6 +169,7 @@ mod tests {
                 max_surge: None,
                 max_unavailable: None,
                 progress_deadline_seconds: None,
+                advisor: Default::default(),
             },
             status: current_weight.map(|weight| crate::crd::rollout::RolloutStatus {
                 phase: Some(Phase::Progressing),
@@ -183,6 +184,7 @@ mod tests {
                 progress_started_at: None,
                 decisions: vec![],
                 ab_experiment: None,
+                last_decision_source: None,
             }),
         }
     }

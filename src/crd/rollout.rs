@@ -55,6 +55,14 @@ pub struct RolloutSpec {
         skip_serializing_if = "Option::is_none"
     )]
     pub progress_deadline_seconds: Option<i32>,
+
+    /// AI advisor configuration for progressive AI adoption
+    #[serde(default, skip_serializing_if = "is_default_advisor_config")]
+    pub advisor: AdvisorConfig,
+}
+
+fn is_default_advisor_config(c: &AdvisorConfig) -> bool {
+    c.level == AdvisorLevel::Off && c.endpoint.is_none() && c.timeout_seconds == 10
 }
 
 fn default_replicas() -> i32 {
@@ -532,6 +540,10 @@ pub struct RolloutStatus {
     /// A/B experiment status (only for abTesting strategy)
     #[serde(rename = "abExperiment", skip_serializing_if = "Option::is_none")]
     pub ab_experiment: Option<ABExperimentStatus>,
+
+    /// Source of last analysis decision (Threshold, Advisor, Human)
+    #[serde(rename = "lastDecisionSource", skip_serializing_if = "Option::is_none")]
+    pub last_decision_source: Option<String>,
 }
 
 /// A/B experiment status tracking
@@ -612,6 +624,81 @@ pub enum ABConclusionReason {
     ManualConclusion,
     /// Consensus reached (all metrics show same winner)
     ConsensusReached,
+}
+
+/// AI advisor integration level
+///
+/// Progressive adoption ladder for AI-assisted rollout decisions.
+/// Each level adds capability while preserving backward compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+pub enum AdvisorLevel {
+    /// No AI integration (default, current behavior)
+    #[default]
+    Off,
+    /// Rich FALSE Protocol events with AI-native context fields
+    Context,
+    /// AI analyzes metrics and returns recommendations (threshold still decides)
+    Advised,
+    /// AI proposes rollout strategy (human approves) — future
+    Planned,
+    /// AI drives the loop with human override — future
+    Driven,
+}
+
+/// Configuration for the AI advisor
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+pub struct AdvisorConfig {
+    /// Advisor integration level
+    #[serde(default)]
+    pub level: AdvisorLevel,
+
+    /// URL of AI advisory service (e.g., MCP endpoint, HTTP API)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+
+    /// Timeout for advisory calls in seconds
+    #[serde(
+        rename = "timeoutSeconds",
+        default = "default_advisor_timeout",
+        skip_serializing_if = "is_default_advisor_timeout"
+    )]
+    pub timeout_seconds: u64,
+}
+
+fn default_advisor_timeout() -> u64 {
+    10
+}
+
+fn is_default_advisor_timeout(v: &u64) -> bool {
+    *v == 10
+}
+
+/// What the advisor recommends after analysis
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Recommendation {
+    pub action: RecommendedAction,
+    pub confidence: f64,
+    pub reasoning: String,
+}
+
+/// Recommended action from the advisor
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum RecommendedAction {
+    Continue,
+    Pause,
+    Rollback,
+    Advance {
+        #[serde(rename = "toWeight")]
+        to_weight: u32,
+    },
+}
+
+/// Tracks where a decision came from
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DecisionSource {
+    Threshold,
+    Advisor { confidence: String },
+    Human,
 }
 
 #[cfg(test)]

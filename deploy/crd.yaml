@@ -53,6 +53,33 @@ spec:
 
               Compatible with Argo Rollouts API for easy migration'
             properties:
+              advisor:
+                default:
+                  level: 'Off'
+                  timeoutSeconds: 0
+                description: AI advisor configuration for progressive AI adoption
+                properties:
+                  endpoint:
+                    description: URL of AI advisory service (e.g., MCP endpoint, HTTP
+                      API)
+                    nullable: true
+                    type: string
+                  level:
+                    default: 'Off'
+                    description: Advisor integration level
+                    enum:
+                    - 'Off'
+                    - Context
+                    - Advised
+                    - Planned
+                    - Driven
+                    type: string
+                  timeoutSeconds:
+                    description: Timeout for advisory calls in seconds
+                    format: uint64
+                    minimum: 0.0
+                    type: integer
+                type: object
               maxSurge:
                 description: 'Maximum number of pods that can be scheduled above the
                   desired number during update.
@@ -9865,6 +9892,11 @@ spec:
                   - timestamp
                   type: object
                 type: array
+              lastDecisionSource:
+                description: Source of last analysis decision (Threshold, Advisor,
+                  Human)
+                nullable: true
+                type: string
               message:
                 description: Human-readable message
                 nullable: true
@@ -19780,6 +19812,11 @@ spec:
                   - timestamp
                   type: object
                 type: array
+              lastDecisionSource:
+                description: Source of last analysis decision (Threshold, Advisor,
+                  Human)
+                nullable: true
+                type: string
               message:
                 description: Human-readable message
                 nullable: true

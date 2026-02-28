@@ -1,7 +1,8 @@
+use crate::controller::advisor::{AnalysisAdvisor, AnalysisContext, NoOpAdvisor};
 use crate::controller::cdevents::emit_status_change_event;
 use crate::controller::occurrence::emit_occurrence;
 use crate::controller::prometheus::MetricsQuerier;
-use crate::crd::rollout::{Phase, Rollout, RolloutStatus};
+use crate::crd::rollout::{AdvisorLevel, Phase, Rollout, RolloutStatus};
 use crate::server::LeaderState;
 use chrono::{DateTime, Utc};
 use kube::api::{Api, Patch, PatchParams};
@@ -48,6 +49,7 @@ pub struct Context {
     pub client: kube::Client,
     pub cdevents_sink: Arc<dyn crate::controller::cdevents::EventSink>,
     pub prometheus_client: Arc<dyn MetricsQuerier>,
+    pub advisor: Arc<dyn AnalysisAdvisor>,
     pub clock: Arc<dyn crate::controller::clock::Clock>,
     /// Optional leader state for multi-replica deployments
     /// When Some, reconciliation is skipped if not the leader
@@ -70,6 +72,7 @@ impl Context {
             client,
             cdevents_sink: Arc::new(cdevents_sink),
             prometheus_client: Arc::new(prometheus_client),
+            advisor: Arc::new(NoOpAdvisor),
             clock,
             leader_state: None,
             metrics,
@@ -92,6 +95,7 @@ impl Context {
             client,
             cdevents_sink: Arc::new(cdevents_sink),
             prometheus_client: Arc::new(prometheus_client),
+            advisor: Arc::new(NoOpAdvisor),
             clock,
             leader_state: Some(leader_state),
             metrics,
@@ -130,6 +134,7 @@ impl Context {
             client,
             cdevents_sink: Arc::new(crate::controller::cdevents::MockEventSink::new()),
             prometheus_client: Arc::new(crate::controller::prometheus::MockPrometheusClient::new()),
+            advisor: Arc::new(NoOpAdvisor),
             clock: Arc::new(crate::controller::clock::SystemClock),
             leader_state: None,
             metrics: None,
@@ -148,6 +153,7 @@ impl Context {
             client: mock.client,
             cdevents_sink: mock.cdevents_sink,
             prometheus_client: mock.prometheus_client,
+            advisor: mock.advisor,
             clock: mock.clock,
             leader_state: Some(leader_state),
             metrics: None,
@@ -226,6 +232,55 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
         if let Some(current_status) = &rollout.status {
             if current_status.phase == Some(Phase::Progressing) {
                 let is_healthy = evaluate_rollout_metrics(&rollout, &ctx).await?;
+
+                // Consult advisor at Level 2+ (advisory only — threshold still decides)
+                if matches!(
+                    rollout.spec.advisor.level,
+                    AdvisorLevel::Advised | AdvisorLevel::Planned | AdvisorLevel::Driven
+                ) {
+                    let analysis_ctx = AnalysisContext {
+                        rollout_name: name.clone(),
+                        namespace: namespace.clone(),
+                        strategy: strategy.name().to_string(),
+                        current_step: current_status.current_step_index,
+                        current_weight: current_status.current_weight,
+                        metrics_healthy: is_healthy,
+                        phase: format!("{:?}", current_status.phase),
+                        history: current_status
+                            .decisions
+                            .iter()
+                            .map(|d| format!("{}: {:?}", d.timestamp, d.action))
+                            .collect(),
+                    };
+
+                    match ctx.advisor.advise(&analysis_ctx).await {
+                        Ok(recommendation) => {
+                            info!(
+                                rollout = ?name,
+                                advisor_action = ?recommendation.action,
+                                confidence = recommendation.confidence,
+                                reasoning = %recommendation.reasoning,
+                                threshold_healthy = is_healthy,
+                                "Advisor recommendation received (threshold decision prevails)"
+                            );
+                            // Emit advisor recommendation occurrence
+                            crate::controller::occurrence::emit_advisor_occurrence(
+                                &rollout,
+                                strategy.name(),
+                                &recommendation,
+                                is_healthy,
+                                &ctx.clock,
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                rollout = ?name,
+                                error = %e,
+                                "Advisor consultation failed, falling back to threshold decision"
+                            );
+                        }
+                    }
+                }
 
                 if !is_healthy {
                     warn!(rollout = ?name, "Metrics unhealthy, triggering rollback");
@@ -309,6 +364,7 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                             winner: evaluation.winner,
                             conclusion_reason: evaluation.reason,
                         }),
+                        last_decision_source: None,
                         ..current_status.clone()
                     };
 

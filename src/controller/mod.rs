@@ -1,3 +1,4 @@
+pub mod advisor;
 pub mod cdevents;
 pub mod clock;
 pub mod occurrence;
