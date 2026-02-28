@@ -19,6 +19,7 @@ fn test_v1alpha1_to_v1beta1_adds_default_max_surge() {
         max_surge: None,
         max_unavailable: None,
         progress_deadline_seconds: None,
+        advisor: Default::default(),
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -38,6 +39,7 @@ fn test_v1alpha1_to_v1beta1_adds_default_max_unavailable() {
         max_surge: None,
         max_unavailable: None,
         progress_deadline_seconds: None,
+        advisor: Default::default(),
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -57,6 +59,7 @@ fn test_v1alpha1_to_v1beta1_adds_default_progress_deadline() {
         max_surge: None,
         max_unavailable: None,
         progress_deadline_seconds: None,
+        advisor: Default::default(),
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -91,6 +94,7 @@ fn test_v1alpha1_to_v1beta1_preserves_existing_fields() {
         max_surge: None,
         max_unavailable: None,
         progress_deadline_seconds: None,
+        advisor: Default::default(),
     };
 
     let v1beta1_spec = convert_to_v1beta1(&v1alpha1_spec);
@@ -185,6 +189,7 @@ fn test_roundtrip_v1alpha1_to_v1beta1_to_v1alpha1() {
         max_surge: None,
         max_unavailable: None,
         progress_deadline_seconds: None,
+        advisor: Default::default(),
     };
 
     let converted = convert_to_v1beta1(&original);

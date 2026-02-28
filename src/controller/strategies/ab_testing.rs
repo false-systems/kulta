@@ -201,6 +201,7 @@ impl RolloutStrategy for ABTestingStrategyHandler {
                         winner: None,
                         conclusion_reason: None,
                     }),
+                    last_decision_source: None,
                     ..Default::default()
                 }
             }
@@ -453,6 +454,7 @@ mod tests {
                 max_surge: None,
                 max_unavailable: None,
                 progress_deadline_seconds: None,
+                advisor: Default::default(),
             },
             status: phase.map(|p| RolloutStatus {
                 phase: Some(p),
@@ -746,6 +748,7 @@ mod tests {
                 winner: Some(ABVariant::B),
                 conclusion_reason: Some(ABConclusionReason::ConsensusReached),
             }),
+            last_decision_source: None,
             ..Default::default()
         });
 
@@ -771,6 +774,7 @@ mod tests {
                 winner: None,
                 conclusion_reason: None, // No conclusion yet
             }),
+            last_decision_source: None,
             ..Default::default()
         });
 

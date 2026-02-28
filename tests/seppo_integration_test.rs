@@ -258,6 +258,7 @@ async fn test_canary_full_lifecycle(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -394,6 +395,7 @@ async fn test_canary_pause_and_promote(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -495,6 +497,7 @@ async fn test_status_decisions_tracking(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -582,6 +585,7 @@ async fn test_blue_green_promotion(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -717,6 +721,7 @@ async fn test_blue_green_auto_promotion(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -811,6 +816,7 @@ async fn test_httproute_weight_updates(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -918,6 +924,7 @@ async fn test_simple_strategy_lifecycle(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -1008,6 +1015,7 @@ async fn test_image_update_triggers_rollout(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };
@@ -1060,6 +1068,7 @@ async fn test_image_update_triggers_rollout(ctx: TestContext) {
             max_surge: None,
             max_unavailable: None,
             progress_deadline_seconds: None,
+            advisor: Default::default(),
         },
         status: None,
     };

@@ -60,6 +60,7 @@ pub fn convert_to_v1alpha1(spec: &v1beta1::RolloutSpec) -> v1alpha1::RolloutSpec
         max_surge: spec.max_surge.clone(),
         max_unavailable: spec.max_unavailable.clone(),
         progress_deadline_seconds: spec.progress_deadline_seconds,
+        advisor: Default::default(),
     }
 }
 

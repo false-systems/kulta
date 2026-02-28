@@ -12,7 +12,7 @@
 //! the mapping logic from rollout state to occurrences.
 
 use crate::controller::clock::Clock;
-use crate::crd::rollout::{Phase, Rollout};
+use crate::crd::rollout::{Phase, Recommendation, Rollout};
 use chrono::{DateTime, Utc};
 use false_protocol::{Entity, Error as OccurrenceError, Occurrence, Outcome, Severity};
 use std::collections::HashMap;
@@ -157,18 +157,64 @@ fn build_occurrence(
             .as_ref()
             .and_then(|s| s.message.clone())
             .unwrap_or_else(|| "Rollout failed".to_string());
+
+        let current_weight = rollout.status.as_ref().and_then(|s| s.current_weight);
+        let current_step = rollout.status.as_ref().and_then(|s| s.current_step_index);
+
+        // Build rich context: what_failed includes traffic context
+        let what_failed = match (current_weight, current_step) {
+            (Some(weight), Some(step)) => format!(
+                "{} for {} {} at step {}/{} ({}% traffic)",
+                message,
+                name,
+                strategy,
+                step + 1,
+                rollout
+                    .spec
+                    .strategy
+                    .canary
+                    .as_ref()
+                    .map(|c| c.steps.len())
+                    .unwrap_or(0),
+                weight,
+            ),
+            _ => format!("Rollout {} failed during {} deployment", name, strategy),
+        };
+
+        // Richer possible_causes based on failure message
+        let mut possible_causes = vec![message.clone()];
+        if message.contains("metrics exceeded") || message.contains("error rate") {
+            possible_causes.push(format!("New code path in {} handlers", name));
+            possible_causes.push("Downstream service degradation".to_string());
+        }
+        if message.contains("deadline exceeded") {
+            possible_causes.push("Pods failing readiness probes".to_string());
+            possible_causes.push("Image pull failures or resource constraints".to_string());
+        }
+
+        let suggested_fix = if message.contains("metrics exceeded") {
+            format!(
+                "Rollback {} to stable, check dependent service health, review recent changes",
+                name
+            )
+        } else {
+            format!(
+                "Check metrics and pod logs for {}, consider manual rollback",
+                name
+            )
+        };
+
         Some(OccurrenceError {
             code: "ROLLOUT_FAILED".to_string(),
-            what_failed: format!("Rollout {} failed during {} deployment", name, strategy),
+            what_failed,
             why_it_matters: Some(format!(
-                "Service {} in namespace {} may be serving degraded traffic",
-                name, namespace
+                "Service {} in namespace {} may be serving degraded traffic to {}% of requests",
+                name,
+                namespace,
+                current_weight.unwrap_or(0),
             )),
-            possible_causes: vec![message],
-            suggested_fix: Some(format!(
-                "Check metrics for {} and consider manual rollback",
-                name
-            )),
+            possible_causes,
+            suggested_fix: Some(suggested_fix),
             ..Default::default()
         })
     } else {
@@ -251,6 +297,87 @@ fn write_occurrence(json: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Emit a FALSE Protocol occurrence for an advisor consultation (Level 2+)
+///
+/// Emits `{strategy}.advisor.recommendation` events that record what the
+/// advisor recommended alongside the threshold decision.
+pub fn emit_advisor_occurrence(
+    rollout: &Rollout,
+    strategy: &str,
+    recommendation: &Recommendation,
+    threshold_healthy: bool,
+    clock: &Arc<dyn Clock>,
+) {
+    let name = match rollout.metadata.name.as_deref() {
+        Some(n) => n,
+        None => return,
+    };
+    let namespace = match rollout.metadata.namespace.as_deref() {
+        Some(ns) => ns,
+        None => return,
+    };
+    let uid = rollout.metadata.uid.as_deref().unwrap_or("");
+    let resource_version = rollout.metadata.resource_version.as_deref().unwrap_or("0");
+    let now = clock.now();
+
+    let prefix = match strategy {
+        "blue_green" => "bluegreen",
+        "ab_testing" => "abtesting",
+        "simple" => "rolling",
+        other => other,
+    };
+    let occurrence_type = format!("{}.advisor.recommendation", prefix);
+
+    let mut occ = match Occurrence::new("kulta", &occurrence_type) {
+        Ok(o) => o,
+        Err(errs) => {
+            warn!(errors = ?errs, "Failed to construct advisor occurrence (non-fatal)");
+            return;
+        }
+    };
+
+    let mut data = HashMap::new();
+    data.insert(
+        "advisor".to_string(),
+        serde_json::json!({
+            "action": recommendation.action,
+            "confidence": recommendation.confidence,
+            "reasoning": recommendation.reasoning,
+            "threshold_healthy": threshold_healthy,
+            "threshold_prevails": true,
+        }),
+    );
+
+    let mut entity = Entity::from_k8s("rollout", uid, name, namespace, resource_version);
+    entity.observed_at = now;
+
+    occ.timestamp = now;
+    occ = occ
+        .severity(Severity::Info)
+        .outcome(Outcome::InProgress)
+        .in_namespace(namespace)
+        .correlate("deployment", name)
+        .correlate("namespace", namespace)
+        .with_entity(entity)
+        .with_data(data);
+
+    if let Ok(cluster) = std::env::var("KULTA_CLUSTER_NAME") {
+        occ = occ.in_cluster(&cluster);
+    }
+
+    let json = match serde_json::to_string(&occ) {
+        Ok(j) => j,
+        Err(e) => {
+            warn!(error = %e, "Failed to serialize advisor occurrence (non-fatal)");
+            return;
+        }
+    };
+
+    if let Err(e) = write_occurrence(&json) {
+        warn!(error = %e, "Failed to write advisor occurrence (non-fatal)");
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -293,6 +420,7 @@ mod tests {
                 max_surge: None,
                 max_unavailable: None,
                 progress_deadline_seconds: None,
+                advisor: Default::default(),
             },
             status: None,
         }
@@ -498,5 +626,118 @@ mod tests {
 
         let err = occ.error.as_ref().unwrap();
         assert!(err.possible_causes[0].contains("High error rate"));
+    }
+
+    #[test]
+    fn test_build_occurrence_failed_with_metrics_exceeded_has_rich_context() {
+        use crate::crd::rollout::{
+            CanaryStep, CanaryStrategy, RolloutStatus, RolloutStrategy as RolloutStrategySpec,
+        };
+
+        let mut rollout = test_rollout();
+        rollout.spec.strategy = RolloutStrategySpec {
+            canary: Some(CanaryStrategy {
+                canary_service: "my-app-canary".into(),
+                stable_service: "my-app-stable".into(),
+                port: None,
+                steps: vec![
+                    CanaryStep {
+                        set_weight: Some(20),
+                        pause: None,
+                    },
+                    CanaryStep {
+                        set_weight: Some(50),
+                        pause: None,
+                    },
+                    CanaryStep {
+                        set_weight: Some(100),
+                        pause: None,
+                    },
+                ],
+                traffic_routing: None,
+                analysis: None,
+            }),
+            blue_green: None,
+            simple: None,
+            ab_testing: None,
+        };
+        rollout.status = Some(RolloutStatus {
+            phase: Some(Phase::Progressing),
+            current_weight: Some(20),
+            current_step_index: Some(0),
+            message: Some("Rollback triggered: metrics exceeded thresholds".into()),
+            ..Default::default()
+        });
+
+        let now = Utc::now();
+        let occ = build_occurrence(
+            &rollout,
+            Some(&Phase::Progressing),
+            &Phase::Failed,
+            "canary",
+            now,
+        )
+        .unwrap();
+
+        let err = occ.error.as_ref().unwrap();
+        // Rich what_failed includes step and weight context
+        assert!(
+            err.what_failed.contains("step 1/3"),
+            "what_failed: {}",
+            err.what_failed
+        );
+        assert!(
+            err.what_failed.contains("20% traffic"),
+            "what_failed: {}",
+            err.what_failed
+        );
+        // Multiple possible causes for metrics failures
+        assert!(err.possible_causes.len() > 1);
+        // why_it_matters includes traffic percentage
+        assert!(err.why_it_matters.as_ref().unwrap().contains("20%"));
+        // suggested_fix mentions rollback
+        assert!(err.suggested_fix.as_ref().unwrap().contains("Rollback"));
+    }
+
+    #[test]
+    fn test_build_occurrence_failed_deadline_exceeded_has_rich_context() {
+        let mut rollout = test_rollout();
+        rollout.status = Some(crate::crd::rollout::RolloutStatus {
+            message: Some("Progress deadline exceeded: no progress made in 600 seconds".into()),
+            ..Default::default()
+        });
+
+        let now = Utc::now();
+        let occ = build_occurrence(
+            &rollout,
+            Some(&Phase::Progressing),
+            &Phase::Failed,
+            "canary",
+            now,
+        )
+        .unwrap();
+
+        let err = occ.error.as_ref().unwrap();
+        assert!(err
+            .possible_causes
+            .iter()
+            .any(|c| c.contains("readiness probes")));
+    }
+
+    #[test]
+    fn test_emit_advisor_occurrence_does_not_panic() {
+        use crate::crd::rollout::{Recommendation, RecommendedAction};
+
+        let rollout = test_rollout();
+        let clock: Arc<dyn Clock> = Arc::new(MockClock::new(Utc::now()));
+
+        let recommendation = Recommendation {
+            action: RecommendedAction::Continue,
+            confidence: 0.85,
+            reasoning: "metrics look healthy, no anomalies detected".into(),
+        };
+
+        // Should not panic even if file write fails in test env
+        emit_advisor_occurrence(&rollout, "canary", &recommendation, true, &clock);
     }
 }

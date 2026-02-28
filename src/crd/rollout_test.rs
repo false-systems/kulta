@@ -407,6 +407,7 @@ fn test_ab_experiment_status_serialization() {
             winner: None,
             conclusion_reason: None,
         }),
+        last_decision_source: None,
         ..Default::default()
     };
 

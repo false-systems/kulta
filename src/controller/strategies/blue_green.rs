@@ -193,6 +193,7 @@ mod tests {
                 max_surge: None,
                 max_unavailable: None,
                 progress_deadline_seconds: None,
+                advisor: Default::default(),
             },
             status: None,
         }
