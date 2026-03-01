@@ -1,4 +1,4 @@
-use crate::controller::advisor::{AnalysisAdvisor, AnalysisContext, NoOpAdvisor};
+use crate::controller::advisor::{resolve_advisor, AnalysisAdvisor, AnalysisContext, NoOpAdvisor};
 use crate::controller::cdevents::emit_status_change_event;
 use crate::controller::occurrence::emit_occurrence;
 use crate::controller::prometheus::MetricsQuerier;
@@ -253,7 +253,8 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                             .collect(),
                     };
 
-                    match ctx.advisor.advise(&analysis_ctx).await {
+                    let advisor = resolve_advisor(&rollout.spec.advisor, &ctx.advisor);
+                    match advisor.advise(&analysis_ctx).await {
                         Ok(recommendation) => {
                             info!(
                                 rollout = ?name,

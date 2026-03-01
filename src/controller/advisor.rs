@@ -128,6 +128,45 @@ impl AnalysisAdvisor for HttpAdvisor {
     }
 }
 
+/// Resolve the appropriate advisor for a Rollout's config
+///
+/// - Level Off/Context → NoOpAdvisor (no external calls)
+/// - Level Advised/Planned/Driven with endpoint → HttpAdvisor
+/// - Level Advised/Planned/Driven without endpoint → NoOpAdvisor (misconfigured, logged)
+///
+/// If `ctx.advisor` is not a NoOpAdvisor (e.g., MockAdvisor in tests),
+/// it is returned as-is — test overrides always win.
+pub fn resolve_advisor(
+    config: &crate::crd::rollout::AdvisorConfig,
+    ctx_advisor: &std::sync::Arc<dyn AnalysisAdvisor>,
+) -> std::sync::Arc<dyn AnalysisAdvisor> {
+    use crate::crd::rollout::AdvisorLevel;
+
+    // If the Context has a non-NoOp advisor (test mock), use it directly
+    if !ctx_advisor.as_any().is::<NoOpAdvisor>() {
+        return ctx_advisor.clone();
+    }
+
+    match config.level {
+        AdvisorLevel::Off | AdvisorLevel::Context => std::sync::Arc::new(NoOpAdvisor),
+        AdvisorLevel::Advised | AdvisorLevel::Planned | AdvisorLevel::Driven => {
+            match &config.endpoint {
+                Some(endpoint) => {
+                    let timeout = Duration::from_secs(config.timeout_seconds);
+                    std::sync::Arc::new(HttpAdvisor::new(endpoint.clone(), timeout))
+                }
+                None => {
+                    tracing::warn!(
+                        level = ?config.level,
+                        "Advisor level requires endpoint but none configured, falling back to no-op"
+                    );
+                    std::sync::Arc::new(NoOpAdvisor)
+                }
+            }
+        }
+    }
+}
+
 /// Mock advisor for testing
 ///
 /// Returns a preconfigured recommendation. Thread-safe via Arc<Mutex<>>.
@@ -275,5 +314,88 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("connection refused"));
+    }
+
+    #[test]
+    fn test_resolve_advisor_off_returns_noop() {
+        use crate::crd::rollout::{AdvisorConfig, AdvisorLevel};
+
+        let config = AdvisorConfig {
+            level: AdvisorLevel::Off,
+            endpoint: Some("http://ai:8080".into()),
+            timeout_seconds: 10,
+        };
+        let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
+
+        let resolved = resolve_advisor(&config, &ctx_advisor);
+        assert!(resolved.as_any().is::<NoOpAdvisor>());
+    }
+
+    #[test]
+    fn test_resolve_advisor_context_returns_noop() {
+        use crate::crd::rollout::{AdvisorConfig, AdvisorLevel};
+
+        let config = AdvisorConfig {
+            level: AdvisorLevel::Context,
+            endpoint: Some("http://ai:8080".into()),
+            timeout_seconds: 10,
+        };
+        let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
+
+        let resolved = resolve_advisor(&config, &ctx_advisor);
+        assert!(resolved.as_any().is::<NoOpAdvisor>());
+    }
+
+    #[test]
+    fn test_resolve_advisor_advised_with_endpoint_returns_http() {
+        use crate::crd::rollout::{AdvisorConfig, AdvisorLevel};
+
+        let config = AdvisorConfig {
+            level: AdvisorLevel::Advised,
+            endpoint: Some("http://ai-advisor:8080/advise".into()),
+            timeout_seconds: 5,
+        };
+        let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
+
+        let resolved = resolve_advisor(&config, &ctx_advisor);
+        assert!(resolved.as_any().is::<HttpAdvisor>());
+    }
+
+    #[test]
+    fn test_resolve_advisor_advised_without_endpoint_returns_noop() {
+        use crate::crd::rollout::{AdvisorConfig, AdvisorLevel};
+
+        let config = AdvisorConfig {
+            level: AdvisorLevel::Advised,
+            endpoint: None,
+            timeout_seconds: 10,
+        };
+        let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
+
+        let resolved = resolve_advisor(&config, &ctx_advisor);
+        // Falls back to NoOp when endpoint is missing
+        assert!(resolved.as_any().is::<NoOpAdvisor>());
+    }
+
+    #[test]
+    fn test_resolve_advisor_mock_override_wins() {
+        use crate::crd::rollout::{AdvisorConfig, AdvisorLevel};
+
+        let config = AdvisorConfig {
+            level: AdvisorLevel::Advised,
+            endpoint: Some("http://ai:8080".into()),
+            timeout_seconds: 10,
+        };
+        // Context has a MockAdvisor — test override should win
+        let mock = MockAdvisor::new(Recommendation {
+            action: RecommendedAction::Rollback,
+            confidence: 1.0,
+            reasoning: "test".into(),
+        });
+        let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(mock);
+
+        let resolved = resolve_advisor(&config, &ctx_advisor);
+        // MockAdvisor should be returned, not HttpAdvisor
+        assert!(resolved.as_any().is::<MockAdvisor>());
     }
 }
