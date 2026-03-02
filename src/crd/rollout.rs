@@ -62,7 +62,9 @@ pub struct RolloutSpec {
 }
 
 fn is_default_advisor_config(c: &AdvisorConfig) -> bool {
-    c.level == AdvisorLevel::Off && c.endpoint.is_none() && c.timeout_seconds == 10
+    c.level == AdvisorLevel::Off
+        && c.endpoint.is_none()
+        && c.timeout_seconds == DEFAULT_ADVISOR_TIMEOUT_SECONDS
 }
 
 fn default_replicas() -> i32 {
@@ -645,8 +647,10 @@ pub enum AdvisorLevel {
     Driven,
 }
 
+const DEFAULT_ADVISOR_TIMEOUT_SECONDS: u64 = 10;
+
 /// Configuration for the AI advisor
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AdvisorConfig {
     /// Advisor integration level
     #[serde(default)]
@@ -665,12 +669,22 @@ pub struct AdvisorConfig {
     pub timeout_seconds: u64,
 }
 
+impl Default for AdvisorConfig {
+    fn default() -> Self {
+        Self {
+            level: AdvisorLevel::Off,
+            endpoint: None,
+            timeout_seconds: DEFAULT_ADVISOR_TIMEOUT_SECONDS,
+        }
+    }
+}
+
 fn default_advisor_timeout() -> u64 {
-    10
+    DEFAULT_ADVISOR_TIMEOUT_SECONDS
 }
 
 fn is_default_advisor_timeout(v: &u64) -> bool {
-    *v == 10
+    *v == DEFAULT_ADVISOR_TIMEOUT_SECONDS
 }
 
 /// What the advisor recommends after analysis

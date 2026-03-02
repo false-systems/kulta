@@ -12,6 +12,8 @@
 use crate::crd::rollout::{Recommendation, RecommendedAction};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -86,10 +88,13 @@ pub struct HttpAdvisor {
 
 impl HttpAdvisor {
     pub fn new(endpoint: String, timeout: Duration) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-            .unwrap_or_default();
+        let client = match reqwest::Client::builder().timeout(timeout).build() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to build advisor HTTP client, using default");
+                reqwest::Client::new()
+            }
+        };
         Self {
             client,
             endpoint,
@@ -115,6 +120,16 @@ impl AnalysisAdvisor for HttpAdvisor {
                 }
             })?;
 
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(AdvisorError::InvalidResponse(format!(
+                "HTTP {}: {}",
+                status,
+                body.chars().take(200).collect::<String>()
+            )));
+        }
+
         let recommendation: Recommendation = response
             .json()
             .await
@@ -128,18 +143,39 @@ impl AnalysisAdvisor for HttpAdvisor {
     }
 }
 
+/// Cache for HttpAdvisor instances, keyed by (endpoint, timeout_seconds).
+///
+/// Prevents constructing a new reqwest::Client on every reconcile call.
+/// Thread-safe via Mutex — lock is held only briefly during lookup/insert.
+#[derive(Default)]
+pub struct AdvisorCache {
+    cache: Mutex<HashMap<(String, u64), Arc<dyn AnalysisAdvisor>>>,
+}
+
+impl AdvisorCache {
+    pub fn new() -> Self {
+        Self {
+            cache: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
 /// Resolve the appropriate advisor for a Rollout's config
 ///
 /// - Level Off/Context → NoOpAdvisor (no external calls)
-/// - Level Advised/Planned/Driven with endpoint → HttpAdvisor
+/// - Level Advised/Planned/Driven with endpoint → cached HttpAdvisor
 /// - Level Advised/Planned/Driven without endpoint → NoOpAdvisor (misconfigured, logged)
 ///
 /// If `ctx.advisor` is not a NoOpAdvisor (e.g., MockAdvisor in tests),
 /// it is returned as-is — test overrides always win.
+///
+/// HttpAdvisor instances are cached by (endpoint, timeout) to reuse
+/// reqwest::Client connections across reconcile calls.
 pub fn resolve_advisor(
     config: &crate::crd::rollout::AdvisorConfig,
-    ctx_advisor: &std::sync::Arc<dyn AnalysisAdvisor>,
-) -> std::sync::Arc<dyn AnalysisAdvisor> {
+    ctx_advisor: &Arc<dyn AnalysisAdvisor>,
+    advisor_cache: &AdvisorCache,
+) -> Arc<dyn AnalysisAdvisor> {
     use crate::crd::rollout::AdvisorLevel;
 
     // If the Context has a non-NoOp advisor (test mock), use it directly
@@ -148,19 +184,30 @@ pub fn resolve_advisor(
     }
 
     match config.level {
-        AdvisorLevel::Off | AdvisorLevel::Context => std::sync::Arc::new(NoOpAdvisor),
+        AdvisorLevel::Off | AdvisorLevel::Context => Arc::new(NoOpAdvisor),
         AdvisorLevel::Advised | AdvisorLevel::Planned | AdvisorLevel::Driven => {
             match &config.endpoint {
                 Some(endpoint) => {
+                    let key = (endpoint.clone(), config.timeout_seconds);
+                    if let Ok(cache) = advisor_cache.cache.lock() {
+                        if let Some(advisor) = cache.get(&key) {
+                            return advisor.clone();
+                        }
+                    }
                     let timeout = Duration::from_secs(config.timeout_seconds);
-                    std::sync::Arc::new(HttpAdvisor::new(endpoint.clone(), timeout))
+                    let advisor: Arc<dyn AnalysisAdvisor> =
+                        Arc::new(HttpAdvisor::new(endpoint.clone(), timeout));
+                    if let Ok(mut cache) = advisor_cache.cache.lock() {
+                        cache.insert(key, advisor.clone());
+                    }
+                    advisor
                 }
                 None => {
                     tracing::warn!(
                         level = ?config.level,
                         "Advisor level requires endpoint but none configured, falling back to no-op"
                     );
-                    std::sync::Arc::new(NoOpAdvisor)
+                    Arc::new(NoOpAdvisor)
                 }
             }
         }
@@ -327,7 +374,7 @@ mod tests {
         };
         let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
 
-        let resolved = resolve_advisor(&config, &ctx_advisor);
+        let resolved = resolve_advisor(&config, &ctx_advisor, &AdvisorCache::new());
         assert!(resolved.as_any().is::<NoOpAdvisor>());
     }
 
@@ -342,7 +389,7 @@ mod tests {
         };
         let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
 
-        let resolved = resolve_advisor(&config, &ctx_advisor);
+        let resolved = resolve_advisor(&config, &ctx_advisor, &AdvisorCache::new());
         assert!(resolved.as_any().is::<NoOpAdvisor>());
     }
 
@@ -357,7 +404,7 @@ mod tests {
         };
         let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
 
-        let resolved = resolve_advisor(&config, &ctx_advisor);
+        let resolved = resolve_advisor(&config, &ctx_advisor, &AdvisorCache::new());
         assert!(resolved.as_any().is::<HttpAdvisor>());
     }
 
@@ -372,7 +419,7 @@ mod tests {
         };
         let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(NoOpAdvisor);
 
-        let resolved = resolve_advisor(&config, &ctx_advisor);
+        let resolved = resolve_advisor(&config, &ctx_advisor, &AdvisorCache::new());
         // Falls back to NoOp when endpoint is missing
         assert!(resolved.as_any().is::<NoOpAdvisor>());
     }
@@ -394,7 +441,7 @@ mod tests {
         });
         let ctx_advisor: std::sync::Arc<dyn AnalysisAdvisor> = std::sync::Arc::new(mock);
 
-        let resolved = resolve_advisor(&config, &ctx_advisor);
+        let resolved = resolve_advisor(&config, &ctx_advisor, &AdvisorCache::new());
         // MockAdvisor should be returned, not HttpAdvisor
         assert!(resolved.as_any().is::<MockAdvisor>());
     }
