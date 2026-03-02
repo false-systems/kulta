@@ -54,9 +54,6 @@ spec:
               Compatible with Argo Rollouts API for easy migration'
             properties:
               advisor:
-                default:
-                  level: 'Off'
-                  timeoutSeconds: 0
                 description: AI advisor configuration for progressive AI adoption
                 properties:
                   endpoint:

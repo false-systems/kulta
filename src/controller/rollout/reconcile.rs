@@ -1,4 +1,6 @@
-use crate::controller::advisor::{AnalysisAdvisor, AnalysisContext, NoOpAdvisor};
+use crate::controller::advisor::{
+    resolve_advisor, AdvisorCache, AnalysisAdvisor, AnalysisContext, NoOpAdvisor,
+};
 use crate::controller::cdevents::emit_status_change_event;
 use crate::controller::occurrence::emit_occurrence;
 use crate::controller::prometheus::MetricsQuerier;
@@ -50,6 +52,7 @@ pub struct Context {
     pub cdevents_sink: Arc<dyn crate::controller::cdevents::EventSink>,
     pub prometheus_client: Arc<dyn MetricsQuerier>,
     pub advisor: Arc<dyn AnalysisAdvisor>,
+    pub advisor_cache: AdvisorCache,
     pub clock: Arc<dyn crate::controller::clock::Clock>,
     /// Optional leader state for multi-replica deployments
     /// When Some, reconciliation is skipped if not the leader
@@ -73,6 +76,7 @@ impl Context {
             cdevents_sink: Arc::new(cdevents_sink),
             prometheus_client: Arc::new(prometheus_client),
             advisor: Arc::new(NoOpAdvisor),
+            advisor_cache: AdvisorCache::new(),
             clock,
             leader_state: None,
             metrics,
@@ -96,6 +100,7 @@ impl Context {
             cdevents_sink: Arc::new(cdevents_sink),
             prometheus_client: Arc::new(prometheus_client),
             advisor: Arc::new(NoOpAdvisor),
+            advisor_cache: AdvisorCache::new(),
             clock,
             leader_state: Some(leader_state),
             metrics,
@@ -135,6 +140,7 @@ impl Context {
             cdevents_sink: Arc::new(crate::controller::cdevents::MockEventSink::new()),
             prometheus_client: Arc::new(crate::controller::prometheus::MockPrometheusClient::new()),
             advisor: Arc::new(NoOpAdvisor),
+            advisor_cache: AdvisorCache::new(),
             clock: Arc::new(crate::controller::clock::SystemClock),
             leader_state: None,
             metrics: None,
@@ -154,6 +160,7 @@ impl Context {
             cdevents_sink: mock.cdevents_sink,
             prometheus_client: mock.prometheus_client,
             advisor: mock.advisor,
+            advisor_cache: AdvisorCache::new(),
             clock: mock.clock,
             leader_state: Some(leader_state),
             metrics: None,
@@ -234,10 +241,12 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                 let is_healthy = evaluate_rollout_metrics(&rollout, &ctx).await?;
 
                 // Consult advisor at Level 2+ (advisory only — threshold still decides)
+                // Skip if endpoint is not configured to avoid misleading no-op events
                 if matches!(
                     rollout.spec.advisor.level,
                     AdvisorLevel::Advised | AdvisorLevel::Planned | AdvisorLevel::Driven
-                ) {
+                ) && rollout.spec.advisor.endpoint.is_some()
+                {
                     let analysis_ctx = AnalysisContext {
                         rollout_name: name.clone(),
                         namespace: namespace.clone(),
@@ -245,7 +254,11 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                         current_step: current_status.current_step_index,
                         current_weight: current_status.current_weight,
                         metrics_healthy: is_healthy,
-                        phase: format!("{:?}", current_status.phase),
+                        phase: current_status
+                            .phase
+                            .as_ref()
+                            .map(|p| format!("{:?}", p))
+                            .unwrap_or_else(|| "Unknown".into()),
                         history: current_status
                             .decisions
                             .iter()
@@ -253,7 +266,9 @@ pub async fn reconcile(rollout: Arc<Rollout>, ctx: Arc<Context>) -> Result<Actio
                             .collect(),
                     };
 
-                    match ctx.advisor.advise(&analysis_ctx).await {
+                    let advisor =
+                        resolve_advisor(&rollout.spec.advisor, &ctx.advisor, &ctx.advisor_cache);
+                    match advisor.advise(&analysis_ctx).await {
                         Ok(recommendation) => {
                             info!(
                                 rollout = ?name,
